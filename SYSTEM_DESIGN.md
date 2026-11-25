@@ -27,7 +27,7 @@
 └───────────────────────────────┬─────────────────────────────────────────┘
                                 │
         ┌───────────────────────┴───────────────────────┐
-        ▼ (Client-side instant recalculation)           ▼ (POST /api/advise)
+        ▼ (Client-side instant recalculation)           ▼ (POST /api/plan, /api/plan/briefing, /api/what-if, /api/ai/ask)
 ┌───────────────────────────────────┐   ┌─────────────────────────────────┐
 │  Tier 1: Deterministic Engine     │   │  Express 5 + Helmet + Zod API   │
 │  (src/domain/* — pure TS)         │   │  (server/ & api/index.ts)       │
@@ -68,21 +68,25 @@ All domain modules are pure TypeScript functions with zero React, DOM, Node, or 
 ### Tier 2: Grounded `@google/genai` Interactions API & Offline Fallback
 - **Primary LLM Integration:** Uses `@google/genai` (`>=3.5.0`) `ai.interactions.create({ model: 'gemini-4-hydrogen', ... })` with strict system instructions binding the model exclusively to the verified `DeterministicReport` JSON payload.
 - **Prompt Injection Defense:** User questions are sanitized and wrapped inside structural `<user_query>` delimiters while system rules explicitly prohibit overriding deterministic metrics or emitting ungrounded health/emission numbers.
-- **Deterministic Offline Fallback:** Whenever `GEMINI_API_KEY` is absent, empty, or an upstream call times out/fails, `server/services/advisorService.ts` deterministically synthesizes localized English (`en`) or Hindi (`hi`) guidance citing exact Tier 1 metrics (`doseReductionUgPerDay`, `optimalVentilationWindow`, `monthlyNetSavingsInr`, `communityCo2eAvoidedKgPerMonth`).
+- **Deterministic Offline Fallback & Briefing (`POST /api/plan/briefing`):** Whenever `GEMINI_API_KEY` is absent, empty, or an upstream call times out/fails, `server/services/genaiService.ts` deterministically synthesizes localized English (`en`) or Hindi (`hi`) guidance and `AiPlanBriefingCard` briefings citing exact Tier 1 metrics (`doseReductionUgPerDay`, `optimalVentilationWindow`, `monthlyNetSavingsInr`, `communityCo2eAvoidedKgPerMonth`), backed by a bounded LRU cache.
 
 ---
 
 ## 3. Security, Privacy & Accessibility (WCAG 2.1 AA)
 
 ### Security & API Hardening
-- **HTTP Headers & CORS:** `helmet` (`^8.1.0`) sets strict CSP, `X-Content-Type-Options: nosniff`, and frame protections; `cors` restricts origins to `ALLOWED_ORIGIN`.
-- **Rate Limiting:** `express-rate-limit` caps `/api/*` requests (`60 req / 15 min` per IP) to prevent abuse and protect free-tier quotas.
-- **Strict Input Validation:** All incoming payloads are validated with `zod` (`^3.24.2`) before reaching domain or AI handlers.
+- **HTTP Headers & CORS:** `helmet` (`^8.1.0`) sets strict CSP, `X-Content-Type-Options: nosniff`, `Permissions-Policy: geolocation=(self)`, `Referrer-Policy: no-referrer`, COOP/CORP headers, and frame protections; `cors` restricts origins to `ALLOWED_ORIGIN`.
+- **Payload & Prototype-Pollution Guard (`bodyGuard`):** Enforces a 16 KB JSON body limit alongside own-property prototype-pollution checks (`__proto__`, `constructor`, `prototype`) and a maximum nesting depth of 8.
+- **Caching & Upstream Coalescing:** Applies a `Cache-Control` split (`public, max-age=300` for preset city AQ vs `private, no-store` for coordinate queries, plans, briefings, and Q&A) and bounded singleflight deduplication (`MAX_INFLIGHT = 100`) to prevent upstream stampedes.
+- **Rate Limiting:** Isolated route-group rate limiting caps `/api/*` requests (`60 req / 15 min` per IP) to prevent abuse and protect free-tier quotas (note: on Vercel serverless deployments, in-memory rate-limit counters are per-instance and reset across cold starts).
+- **Strict Input Validation & Dependency Hygiene:** All incoming payloads are validated with `zod` (`^4.6.7`) returning sanitized errors before reaching domain or AI handlers, paired with 0-CVE npm dependencies.
 - **Zero Secret Exposure:** API keys live strictly in server environment variables (`.env`), never bundled into `VITE_*` client assets.
 - **Zero PII Storage:** Stateless architecture with no database or user tracking.
 
-### Accessibility (WCAG 2.1 AA)
-- Semantic landmarks (`<header>`, `<main>`, `<nav>`, `<section>`, `<footer>`) with a skip-to-content link.
+### Accessibility & Quality Gates (WCAG 2.1 AA)
+- Semantic landmarks (`<header>`, `<main>`, `<nav>`, `<section>`, `<footer>`), skip-to-content link, and a bilingual `ErrorBoundary` fallback.
+- Screen-reader-accessible `sr-only` semantic `<table>` inside `ImpactDashboard` mirroring the SVG chart metrics, plus `<fieldset>`/`<legend>` groupings and `aria-invalid`/`aria-describedby` wiring.
 - Full keyboard navigability with visible focus rings (`focus-visible:ring-2`) and `aria-live="polite"` announcements for live metric updates and advisor responses.
-- Minimum `4.5:1` foreground/background contrast across air-quality severity badges and interactive controls.
+- Minimum `4.5:1` foreground/background contrast across air-quality severity badges and interactive controls, with `prefers-reduced-motion` support.
 - Native `<label htmlFor>` associations on all form inputs, sliders, and language/persona toggles.
+- Automated Vitest coverage gates enforcing `>=85%` statements, functions, and lines, and `>=75%` branches.

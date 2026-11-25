@@ -14,6 +14,19 @@ import { getEnvConfig } from '../config/env.js';
 
 const FIFTEEN_MINUTES_MS = 15 * 60 * 1000;
 
+/**
+ * Per-route 15-minute request limits.
+ * Note: On Vercel serverless functions, rate-limit counters reside in per-instance
+ * memory and reset across cold starts or concurrent lambda isolates.
+ */
+export const RATE_LIMITS = {
+  HEALTH: 60,
+  GEO: 60,
+  PLAN: 120,
+  AI_ASK: 40,
+  BRIEFING: 40,
+} as const;
+
 const DEFAULT_DEV_ORIGINS: readonly string[] = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
@@ -63,24 +76,44 @@ function buildAllowedOrigins(): ReadonlySet<string> {
 }
 
 /**
- * Creates Helmet middleware with strict CSP, X-Frame-Options: DENY, and nosniff.
+ * Creates Helmet middleware with strict CSP, isolation headers, and nosniff.
  */
 export function createHelmetMiddleware(): RequestHandler {
+  const isProd = process.env['NODE_ENV'] === 'production';
   return helmet({
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: isProd ? ["'self'"] : ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", 'data:'],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"],
         frameAncestors: ["'none'"],
+        ...(isProd ? { upgradeInsecureRequests: [] } : {}),
       },
     },
+    referrerPolicy: { policy: 'no-referrer' },
+    crossOriginOpenerPolicy: { policy: 'same-origin' },
+    crossOriginResourcePolicy: { policy: 'same-origin' },
     frameguard: { action: 'deny' },
     xContentTypeOptions: true,
   });
+}
+
+/**
+ * Sets Permissions-Policy header restricting sensitive browser hardware APIs.
+ */
+export function createPermissionsPolicyMiddleware(): RequestHandler {
+  return (_req, res, next) => {
+    res.setHeader(
+      'Permissions-Policy',
+      'geolocation=(self), camera=(), microphone=(), payment=(), usb=()',
+    );
+    next();
+  };
 }
 
 /**
@@ -129,12 +162,26 @@ export function createRouteLimiters(): {
   readonly geoLimiter: RequestHandler;
   readonly planLimiter: RequestHandler;
   readonly aiAskLimiter: RequestHandler;
+  readonly briefingLimiter: RequestHandler;
 } {
   return {
-    healthLimiter: makeLimiter(60, 'Too many health check requests. Try again later.'),
-    geoLimiter: makeLimiter(60, 'Too many location search requests. Please slow down.'),
-    planLimiter: makeLimiter(120, 'Too many plan requests. Try again later.'),
-    aiAskLimiter: makeLimiter(40, 'Too many assistant requests. Try again later.'),
+    healthLimiter: makeLimiter(
+      RATE_LIMITS.HEALTH,
+      'Too many health check requests. Try again later.',
+    ),
+    geoLimiter: makeLimiter(
+      RATE_LIMITS.GEO,
+      'Too many location search requests. Please slow down.',
+    ),
+    planLimiter: makeLimiter(RATE_LIMITS.PLAN, 'Too many plan requests. Try again later.'),
+    aiAskLimiter: makeLimiter(
+      RATE_LIMITS.AI_ASK,
+      'Too many assistant requests. Try again later.',
+    ),
+    briefingLimiter: makeLimiter(
+      RATE_LIMITS.BRIEFING,
+      'Too many briefing requests. Try again later.',
+    ),
   };
 }
 
@@ -174,7 +221,7 @@ export const centralizedErrorHandler: ErrorRequestHandler = (err, _req, res, _ne
   if (err instanceof ZodError) {
     res.status(400).json({
       error: 'Validation failed.',
-      details: err.issues.map((issue) => ({
+      details: err.issues.slice(0, 5).map((issue) => ({
         path: issue.path.join('.'),
         message: issue.message,
       })),

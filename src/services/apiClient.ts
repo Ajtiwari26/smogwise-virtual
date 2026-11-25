@@ -51,6 +51,16 @@ interface LocationSearchResponse {
   readonly results: readonly LocationSearchItem[];
 }
 
+/** Response payload returned by POST /api/plan/briefing. */
+export interface PlanBriefingApiResponse {
+  readonly headline: string;
+  readonly summary: string;
+  readonly whyActions: readonly string[];
+  readonly language: LanguageCode;
+  readonly mode: 'gemini_interactions' | 'offline_grounded';
+  readonly citationsUsed: readonly string[];
+}
+
 /** Response payload returned by POST /api/ai/ask. */
 export interface AiAskApiResponse {
   readonly answer: string;
@@ -149,6 +159,18 @@ export async function postPlan(
   signal?: AbortSignal,
 ): Promise<FullPlanOutput> {
   return requestJson<FullPlanOutput>('/api/plan', {
+    method: 'POST',
+    body: JSON.stringify(profile),
+    ...(signal !== undefined ? { signal } : {}),
+  });
+}
+
+/** Synthesizes a grounded household action briefing via POST /api/plan/briefing. */
+export async function postPlanBriefing(
+  profile: UserProfile,
+  signal?: AbortSignal,
+): Promise<PlanBriefingApiResponse> {
+  return requestJson<PlanBriefingApiResponse>('/api/plan/briefing', {
     method: 'POST',
     body: JSON.stringify(profile),
     ...(signal !== undefined ? { signal } : {}),

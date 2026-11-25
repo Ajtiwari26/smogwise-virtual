@@ -4,7 +4,7 @@
  */
 
 import { z } from 'zod';
-import { CustomLocationSchema } from './locationGuard.js';
+import { CustomLocationSchema, stripZeroWidthAndBidi } from './locationGuard.js';
 
 export * from './locationGuard.js';
 
@@ -167,7 +167,7 @@ function sanitizeText(rawText: string): string {
  * medical jailbreaks, secret probes, and markdown image exfiltration.
  */
 export function inspectAndSanitizePrompt(rawText: string): PromptInspectionResult {
-  const normalized = rawText.normalize('NFKC');
+  const normalized = stripZeroWidthAndBidi(rawText.normalize('NFKC'));
   const reasons: string[] = [];
   for (const rule of DIRECT_RULES) {
     if (rule.regex.test(normalized)) {

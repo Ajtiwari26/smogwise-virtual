@@ -27,6 +27,29 @@ const UNSAFE_QUERY_RE = new RegExp(
   'i',
 );
 
+function isZeroWidthOrBidiCode(code: number): boolean {
+  return (
+    (code >= 0x200b && code <= 0x200f) ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2066 && code <= 0x2069) ||
+    code === 0xfeff
+  );
+}
+
+/**
+ * Strips zero-width formatting and bidirectional override characters via charCode checks.
+ */
+export function stripZeroWidthAndBidi(raw: string): string {
+  let out = '';
+  for (let i = 0; i < raw.length; i += 1) {
+    const code = raw.charCodeAt(i);
+    if (!isZeroWidthOrBidiCode(code)) {
+      out += raw[i] ?? '';
+    }
+  }
+  return out;
+}
+
 /**
  * Strips structured citation tags such as `[CALC:...]`, `[SCI:...]`, `[AQ:...]`,
  * `[POLICY:...]`, or `[PRESET:...]` without using escaped bracket regex literals.
@@ -64,7 +87,7 @@ export function stripCitationTags(raw: string): string {
  * Normalizes and sanitizes untrusted location text for safe display and storage.
  */
 export function sanitizeLocationText(raw: string): string {
-  const normalized = raw.normalize('NFKC');
+  const normalized = stripZeroWidthAndBidi(raw.normalize('NFKC'));
   const withoutTags = stripCitationTags(normalized);
   return withoutTags
     .replace(/[^\p{L}\p{N} .\-()]/gu, ' ')
@@ -89,7 +112,7 @@ export function escapeXml(value: string): string {
  * Detects URLs, SSRF targets, control characters, and delimiter injection characters.
  */
 export function isUnsafeLocationQuery(raw: string): boolean {
-  const normalized = raw.normalize('NFKC');
+  const normalized = stripZeroWidthAndBidi(raw.normalize('NFKC'));
   for (let i = 0; i < normalized.length; i += 1) {
     const code = normalized.charCodeAt(i);
     const ch = normalized[i] ?? '';
@@ -98,6 +121,21 @@ export function isUnsafeLocationQuery(raw: string): boolean {
     }
   }
   return UNSAFE_QUERY_RE.test(normalized);
+}
+
+/**
+ * Canonical validator for city names and preset IDs (e.g., `delhi_anand_vihar`).
+ */
+export function isUnsafeCityInput(rawCity: string): boolean {
+  const nfkc = rawCity.normalize('NFKC');
+  if (stripZeroWidthAndBidi(nfkc) !== nfkc) {
+    return true;
+  }
+  const trimmed = nfkc.trim();
+  if (trimmed.length === 0 || isUnsafeLocationQuery(trimmed)) {
+    return true;
+  }
+  return !SAFE_CITY_ID_RE.test(trimmed);
 }
 
 /** Zod schema validating GET /api/locations/search query parameter `q`. */

@@ -5,11 +5,13 @@
 
 import express from 'express';
 import type { Express, Request, Response } from 'express';
+import { rejectPrototypePollutionAndDepth } from './middleware/bodyGuard.js';
 import {
   centralizedErrorHandler,
   createCorsMiddleware,
   createHelmetMiddleware,
   createJsonBodyParser,
+  createPermissionsPolicyMiddleware,
 } from './middleware/security.js';
 import { createApiRouter } from './routes/apiRoutes.js';
 
@@ -28,6 +30,8 @@ export function createApp(): Express {
   app.use(createHelmetMiddleware());
   app.use(createCorsMiddleware());
   app.use(createJsonBodyParser());
+  app.use(createPermissionsPolicyMiddleware());
+  app.use(rejectPrototypePollutionAndDepth);
 
   app.use('/api', createApiRouter());
   app.use(handleNotFound);
@@ -36,5 +40,4 @@ export function createApp(): Express {
   return app;
 }
 
-/** Default pre-configured Express app instance. */
-export const app: Express = createApp();
+/** Default pre-configured Express app instance. */export const app: Express = createApp();

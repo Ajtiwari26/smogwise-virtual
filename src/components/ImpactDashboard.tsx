@@ -33,6 +33,121 @@ function buildPolylinePoints(
     .join(' ');
 }
 
+function formatHourLabel(hour: number): string {
+  return `${String(hour).padStart(2, '0')}:00`;
+}
+
+const DiurnalSummaryTable: React.FC<DiurnalChartProps> = React.memo(function DiurnalSummaryTable({
+  series,
+  language,
+}) {
+  const isHi = language === 'hi';
+  const targetHours = [7, 14, 20, 1];
+  const keyRows = targetHours
+    .map((hr) => series.find((pt) => pt.hour === hr))
+    .filter((pt): pt is HourlyExposurePoint => pt !== undefined);
+  const rows = keyRows.length > 0 ? keyRows : series.slice(0, 4);
+  const count = Math.max(1, series.length);
+  const avgOutdoor = Math.round(series.reduce((sum, pt) => sum + pt.outdoorPm25, 0) / count);
+  const avgIndoor = Math.round(
+    series.reduce((sum, pt) => sum + pt.optimizedIndoorPm25, 0) / count,
+  );
+
+  return (
+    <table className="sr-only">
+      <caption>
+        {isHi
+          ? '24 घंटे बाहरी बनाम अनुकूलित इनडोर PM2.5 तुलना (µg/m³)'
+          : '24-hour Outdoor vs Optimized Indoor PM2.5 Comparison (ug/m3)'}
+      </caption>
+      <thead>
+        <tr>
+          <th scope="col">{isHi ? 'समय अवधि' : 'Time Period'}</th>
+          <th scope="col">{isHi ? 'बाहरी PM2.5 (ug/m3)' : 'Outdoor PM2.5 (ug/m3)'}</th>
+          <th scope="col">{isHi ? 'इनडोर PM2.5 (ug/m3)' : 'Optimized Indoor PM2.5 (ug/m3)'}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((pt) => (
+          <tr key={pt.hour}>
+            <th scope="row">{formatHourLabel(pt.hour)}</th>
+            <td>{Math.round(pt.outdoorPm25)}</td>
+            <td>{Math.round(pt.optimizedIndoorPm25)}</td>
+          </tr>
+        ))}
+        <tr>
+          <th scope="row">{isHi ? '24-घंटे औसत' : '24h Average'}</th>
+          <td>{avgOutdoor}</td>
+          <td>{avgIndoor}</td>
+        </tr>
+      </tbody>
+    </table>
+  );
+});
+
+interface DiurnalSvgBodyProps {
+  readonly series: readonly HourlyExposurePoint[];
+  readonly isHi: boolean;
+  readonly width: number;
+  readonly height: number;
+  readonly pad: number;
+  readonly outdoorPts: string;
+  readonly indoorPts: string;
+}
+
+const DiurnalSvgBody: React.FC<DiurnalSvgBodyProps> = React.memo(function DiurnalSvgBody({
+  series,
+  isHi,
+  width,
+  height,
+  pad,
+  outdoorPts,
+  indoorPts,
+}) {
+  return (
+    <svg
+      viewBox={`0 0 ${String(width)} ${String(height)}`}
+      role="img"
+      aria-label={
+        isHi
+          ? '24 घंटे का बाहरी और इनडोर PM2.5 चार्ट'
+          : '24-hour diurnal outdoor versus optimized indoor PM2.5 chart'
+      }
+      className="h-40 w-full"
+    >
+      <title>
+        {isHi
+          ? '24 घंटे बाहरी बनाम इनडोर PM2.5 ग्राफ'
+          : '24-Hour Outdoor vs Optimized Indoor PM2.5 Profile'}
+      </title>
+      <desc>
+        {isHi
+          ? 'सुबह और शाम स्मॉग पीक तथा दोपहर 13:00-16:00 वेंटिलेशन विंडो को दर्शाता है।'
+          : 'Shows morning and evening inversion peaks and 13:00-16:00 safe ventilation window.'}
+      </desc>
+      {series.map((pt, idx) => {
+        if (!pt.isOptimalVentilation) {
+          return null;
+        }
+        const x = pad + (idx / Math.max(1, series.length - 1)) * (width - pad * 2);
+        return (
+          <rect
+            key={pt.hour}
+            x={x - 8}
+            y={pad}
+            width={16}
+            height={height - pad * 2}
+            fill="#ccfbf1"
+            aria-hidden="true"
+          />
+        );
+      })}
+      <polyline fill="none" stroke="#9a3412" strokeWidth="2.5" points={outdoorPts} aria-hidden="true" />
+      <polyline fill="none" stroke="#0f766e" strokeWidth="2.5" points={indoorPts} aria-hidden="true" />
+    </svg>
+  );
+});
+
 const DiurnalSvgChart: React.FC<DiurnalChartProps> = React.memo(function DiurnalSvgChart({
   series,
   language,
@@ -42,7 +157,6 @@ const DiurnalSvgChart: React.FC<DiurnalChartProps> = React.memo(function Diurnal
     const vals = series.map((p) => Math.max(p.outdoorPm25, p.optimizedIndoorPm25));
     return Math.max(100, ...vals);
   }, [series]);
-
   const width = 480;
   const height = 160;
   const pad = 24;
@@ -65,45 +179,16 @@ const DiurnalSvgChart: React.FC<DiurnalChartProps> = React.memo(function Diurnal
           <span className="text-teal-800">■ {isHi ? 'इनडोर' : 'Indoor'}</span>
         </span>
       </div>
-      <svg
-        viewBox={`0 0 ${String(width)} ${String(height)}`}
-        role="img"
-        aria-label={
-          isHi
-            ? '24 घंटे का बाहरी और इनडोर PM2.5 चार्ट'
-            : '24-hour diurnal outdoor versus optimized indoor PM2.5 chart'
-        }
-        className="h-40 w-full"
-      >
-        <title>
-          {isHi
-            ? '24 घंटे बाहरी बनाम इनडोर PM2.5 ग्राफ'
-            : '24-Hour Outdoor vs Optimized Indoor PM2.5 Profile'}
-        </title>
-        <desc>
-          {isHi
-            ? 'सुबह और शाम स्मॉग पीक तथा दोपहर 13:00-16:00 वेंटिलेशन विंडो को दर्शाता है।'
-            : 'Shows morning and evening inversion peaks and 13:00-16:00 safe ventilation window.'}
-        </desc>
-        {series.map((pt, idx) => {
-          if (!pt.isOptimalVentilation) {
-            return null;
-          }
-          const x = pad + (idx / Math.max(1, series.length - 1)) * (width - pad * 2);
-          return (
-            <rect
-              key={pt.hour}
-              x={x - 8}
-              y={pad}
-              width={16}
-              height={height - pad * 2}
-              fill="#ccfbf1"
-            />
-          );
-        })}
-        <polyline fill="none" stroke="#9a3412" strokeWidth="2.5" points={outdoorPts} />
-        <polyline fill="none" stroke="#0f766e" strokeWidth="2.5" points={indoorPts} />
-      </svg>
+      <DiurnalSvgBody
+        series={series}
+        isHi={isHi}
+        width={width}
+        height={height}
+        pad={pad}
+        outdoorPts={outdoorPts}
+        indoorPts={indoorPts}
+      />
+      <DiurnalSummaryTable series={series} language={language} />
       <p className="mt-1.5 text-[11px] text-slate-700">
         {isHi
           ? 'मान्यता: एकल-ज़ोन मिश्रित कमरा मॉडल; हरा क्षेत्र (13:00–16:00) सुरक्षित वेंटिलेशन विंडो है।'
@@ -118,7 +203,6 @@ export const ImpactDashboard: React.FC<ImpactDashboardProps> = React.memo(
   function ImpactDashboard({ report, language }) {
     const isHi = language === 'hi';
     const { exposure, emissions, citations } = report;
-
     const cards = [
       {
         title: isHi ? 'दैनिक PM2.5 खुराक' : 'Inhaled PM2.5 Dose',

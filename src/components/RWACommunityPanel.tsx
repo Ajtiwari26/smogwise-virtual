@@ -12,6 +12,55 @@ export interface RWACommunityPanelProps {
   readonly onAdoptionChange: (rate: number) => void;
 }
 
+interface RwaRangeFieldProps {
+  readonly id: string;
+  readonly label: string;
+  readonly valueText: string;
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+  readonly value: number;
+  readonly hint: string;
+  readonly onChange: (value: number) => void;
+}
+
+const RwaRangeField: React.FC<RwaRangeFieldProps> = React.memo(function RwaRangeField({
+  id,
+  label,
+  valueText,
+  min,
+  max,
+  step,
+  value,
+  hint,
+  onChange,
+}) {
+  const invalid = !Number.isFinite(value) || value < min || value > max;
+  const hintId = `${id}-hint`;
+  return (
+    <div>
+      <label htmlFor={id} className="block text-xs font-semibold text-slate-800">
+        {label}: {valueText}
+      </label>
+      <input
+        id={id}
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        aria-describedby={hintId}
+        aria-invalid={invalid}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="mt-1 w-full accent-teal-700"
+      />
+      <span id={hintId} className="mt-0.5 block text-[11px] text-slate-700">
+        {hint}
+      </span>
+    </div>
+  );
+});
+
 const RwaNoticeBox: React.FC<{
   readonly rwaNotice: string;
   readonly isHi: boolean;
@@ -74,6 +123,7 @@ export const RWACommunityPanel: React.FC<RWACommunityPanelProps> = React.memo(
     const isHi = language === 'hi';
     const [copied, setCopied] = useState<boolean>(false);
     const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+    const adoptionPct = Math.round(adoptionRate * 100);
 
     useEffect(() => () => clearTimeout(timerRef.current), []);
 
@@ -97,36 +147,28 @@ export const RWACommunityPanel: React.FC<RWACommunityPanelProps> = React.memo(
           {isHi ? 'RWA और समुदाय का सामूहिक प्रभाव' : 'RWA & Neighborhood Multiplier'}
         </h2>
         <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label htmlFor="rwa-households" className="block text-xs font-semibold text-slate-800">
-              {isHi ? 'फ्लैट / परिवारों की संख्या' : 'Households in Society'}: {households}
-            </label>
-            <input
-              id="rwa-households"
-              type="range"
-              min={10}
-              max={500}
-              step={10}
-              value={households}
-              onChange={(e) => onHouseholdsChange(Number(e.target.value))}
-              className="mt-1 w-full accent-teal-700"
-            />
-          </div>
-          <div>
-            <label htmlFor="rwa-adoption" className="block text-xs font-semibold text-slate-800">
-              {isHi ? 'भागीदारी दर' : 'Adoption Rate'}: {Math.round(adoptionRate * 100)}%
-            </label>
-            <input
-              id="rwa-adoption"
-              type="range"
-              min={10}
-              max={100}
-              step={5}
-              value={Math.round(adoptionRate * 100)}
-              onChange={(e) => onAdoptionChange(Number(e.target.value) / 100)}
-              className="mt-1 w-full accent-teal-700"
-            />
-          </div>
+          <RwaRangeField
+            id="rwa-households"
+            label={isHi ? 'फ्लैट / परिवारों की संख्या' : 'Households in Society'}
+            valueText={String(households)}
+            min={10}
+            max={500}
+            step={10}
+            value={households}
+            hint={isHi ? 'अनुमत सीमा: 10 से 500 परिवार' : 'Allowed range: 10 to 500 households'}
+            onChange={onHouseholdsChange}
+          />
+          <RwaRangeField
+            id="rwa-adoption"
+            label={isHi ? 'भागीदारी दर' : 'Adoption Rate'}
+            valueText={`${String(adoptionPct)}%`}
+            min={10}
+            max={100}
+            step={5}
+            value={adoptionPct}
+            hint={isHi ? 'अनुमत सीमा: 10% से 100%' : 'Allowed range: 10% to 100%'}
+            onChange={(pct) => onAdoptionChange(pct / 100)}
+          />
         </div>
         <RwaMetricsGrid emissions={emissions} isHi={isHi} />
         <RwaNoticeBox rwaNotice={rwaNotice} isHi={isHi} copied={copied} onCopy={handleCopy} />

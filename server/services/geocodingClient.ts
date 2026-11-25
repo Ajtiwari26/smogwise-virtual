@@ -1,12 +1,13 @@
 /**
  * SSRF-safe Open-Meteo Geocoding client restricted to India (countryCode=IN)
- * with 3.5s AbortController timeout, 24h LRU caching, and curated preset fallback.
+ * with 3.5s AbortController timeout, singleflight coalescing, 24h LRU caching,
+ * and curated preset fallback.
  */
 
 import { z } from 'zod';
 import { CITY_PRESETS } from '../../src/domain/cityPresets.js';
 import type { LocationSearchItem } from '../../src/domain/types.js';
-import { createLruCache, hashCacheKey } from '../cache/lruCache.js';
+import { createLruCache, createSingleflight, hashCacheKey } from '../cache/lruCache.js';
 import { sanitizeLocationText } from '../middleware/locationGuard.js';
 
 const OPEN_METEO_GEO_ENDPOINT = 'https://geocoding-api.open-meteo.com/v1/search';
@@ -32,6 +33,7 @@ const GeocodingResponseSchema = z.object({
 });
 
 const geoCache = createLruCache<readonly LocationSearchItem[]>(200, GEO_CACHE_TTL_MS);
+const geoSingleflight = createSingleflight<readonly LocationSearchItem[]>(100);
 
 function normalizeQueryKey(rawQuery: string): string {
   return rawQuery.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -39,10 +41,10 @@ function normalizeQueryKey(rawQuery: string): string {
 
 function isInsideIndia(lat: number, lon: number): boolean {
   return (
-    lat >= INDIA_LAT_MIN
-    && lat <= INDIA_LAT_MAX
-    && lon >= INDIA_LON_MIN
-    && lon <= INDIA_LON_MAX
+    lat >= INDIA_LAT_MIN &&
+    lat <= INDIA_LAT_MAX &&
+    lon >= INDIA_LON_MIN &&
+    lon <= INDIA_LON_MAX
   );
 }
 
@@ -148,10 +150,7 @@ async function fetchOpenMeteoGeocoding(
   }
 }
 
-/**
- * Searches Indian cities and localities via Open-Meteo Geocoding with 24h LRU caching
- * and offline fallback to curated Indian city presets.
- */
+/** Searches Indian cities via Open-Meteo Geocoding with 24h LRU & singleflight caching. */
 export async function searchIndianLocations(
   query: string,
 ): Promise<readonly LocationSearchItem[]> {
@@ -159,27 +158,23 @@ export async function searchIndianLocations(
   if (cleanQuery.length < 2) {
     return [];
   }
-  const cacheKey = hashCacheKey({
-    service: 'open-meteo-geo',
-    q: normalizeQueryKey(cleanQuery),
-  });
+  const cacheKey = hashCacheKey({ service: 'open-meteo-geo', q: normalizeQueryKey(cleanQuery) });
   const cached = geoCache.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
-
-  const remoteResults = await fetchOpenMeteoGeocoding(cleanQuery);
-  if (remoteResults !== null) {
-    geoCache.set(cacheKey, remoteResults, GEO_CACHE_TTL_MS);
-    return remoteResults;
-  }
-
-  return searchCuratedIndianPresets(cleanQuery);
+  return geoSingleflight.run(cacheKey, async () => {
+    const remoteResults = await fetchOpenMeteoGeocoding(cleanQuery);
+    if (remoteResults !== null) {
+      geoCache.set(cacheKey, remoteResults, GEO_CACHE_TTL_MS);
+      return remoteResults;
+    }
+    return searchCuratedIndianPresets(cleanQuery);
+  });
 }
 
-/**
- * Clears the in-memory geocoding LRU cache (useful for deterministic testing).
- */
+/** Clears the in-memory geocoding LRU cache and in-flight map. */
 export function clearGeocodingCache(): void {
   geoCache.clear();
+  geoSingleflight.clear();
 }

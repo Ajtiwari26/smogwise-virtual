@@ -1,5 +1,7 @@
 import React from 'react';
+import { AiPlanBriefingCard } from './components/AiPlanBriefingCard.js';
 import { DailyRoutineTimeline } from './components/DailyRoutineTimeline.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { GroundedAssistant } from './components/GroundedAssistant.js';
 import { Header } from './components/Header.js';
 import { ImpactDashboard } from './components/ImpactDashboard.js';
@@ -40,11 +42,15 @@ function AppMainColumns({ state }: { readonly state: UseSmogPlanResult }): React
     profile,
     plan,
     liveAq,
+    briefing,
+    isBriefingLoading,
     updateProfile,
     toggleHack,
     selectLocation,
     selectPresetCity,
     applySampleScenario,
+    updateRwaHouseholds,
+    updateRwaAdoptionRate,
   } = state;
   const { report, routine, iaqHacks, rwaNotice, citations } = plan;
   const indoorTargetCitation = citations['CALC:INDOOR_TARGET'];
@@ -66,6 +72,12 @@ function AppMainColumns({ state }: { readonly state: UseSmogPlanResult }): React
 
       <div className="space-y-5 lg:col-span-8">
         <ImpactDashboard report={report} language={profile.language} />
+        <AiPlanBriefingCard
+          report={report}
+          briefing={briefing}
+          isLoading={isBriefingLoading}
+          language={profile.language}
+        />
         <DailyRoutineTimeline
           routine={routine}
           optimalVentilationWindow={report.exposure.optimalVentilationWindow}
@@ -80,8 +92,8 @@ function AppMainColumns({ state }: { readonly state: UseSmogPlanResult }): React
           emissions={report.emissions}
           rwaNotice={rwaNotice}
           language={profile.language}
-          onHouseholdsChange={(rwaHouseholds) => updateProfile({ rwaHouseholds })}
-          onAdoptionChange={(rwaAdoptionRate) => updateProfile({ rwaAdoptionRate })}
+          onHouseholdsChange={updateRwaHouseholds}
+          onAdoptionChange={updateRwaAdoptionRate}
         />
         <GroundedAssistant profile={profile} />
       </div>
@@ -109,7 +121,9 @@ export const App: React.FC = function App() {
 
       <main id="main-content" className="mx-auto max-w-7xl space-y-4 px-4 py-5">
         <SmogAlertBanner {...buildBannerProps(state)} />
-        <AppMainColumns state={state} />
+        <ErrorBoundary language={profile.language}>
+          <AppMainColumns state={state} />
+        </ErrorBoundary>
       </main>
 
       <footer className="mt-8 border-t border-slate-300 bg-white py-4 text-center text-xs text-slate-700">

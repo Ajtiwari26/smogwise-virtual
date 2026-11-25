@@ -20,6 +20,12 @@ export interface LruCacheStats {
   readonly maxEntries: number;
 }
 
+/** Bounded singleflight coalescer that deduplicates concurrent async work by key. */
+export interface Singleflight<T> {
+  run(key: string, work: () => Promise<T>): Promise<T>;
+  clear(): void;
+}
+
 function canonicalizeValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => canonicalizeValue(item));
@@ -140,4 +146,31 @@ export function createLruCache<T>(
   defaultTtlMs = DEFAULT_TTL_MS,
 ): LruCache<T> {
   return new LruCache<T>(maxEntries, defaultTtlMs);
+}
+
+/**
+ * Creates a bounded singleflight map that shares an in-flight promise per key
+ * and removes entries once settled.
+ */
+export function createSingleflight<T>(maxInFlight = 100): Singleflight<T> {
+  const limit = Math.max(1, Math.floor(maxInFlight));
+  const inFlight = new Map<string, Promise<T>>();
+  return {
+    run(key: string, work: () => Promise<T>): Promise<T> {
+      const existing = inFlight.get(key);
+      if (existing !== undefined) {
+        return existing;
+      }
+      const promise = work().finally(() => {
+        inFlight.delete(key);
+      });
+      if (inFlight.size < limit) {
+        inFlight.set(key, promise);
+      }
+      return promise;
+    },
+    clear(): void {
+      inFlight.clear();
+    },
+  };
 }

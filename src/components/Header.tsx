@@ -47,6 +47,7 @@ const LanguageSwitcher: React.FC<{
     >
       <button
         type="button"
+        lang="en"
         aria-pressed={language === 'en'}
         onClick={() => onChange('en')}
         className={`rounded px-2.5 py-1 text-xs font-semibold focus-visible:ring-2 focus-visible:ring-teal-700 ${
@@ -57,6 +58,7 @@ const LanguageSwitcher: React.FC<{
       </button>
       <button
         type="button"
+        lang="hi"
         aria-pressed={language === 'hi'}
         onClick={() => onChange('hi')}
         className={`rounded px-2.5 py-1 text-xs font-semibold focus-visible:ring-2 focus-visible:ring-teal-700 ${
