@@ -23,6 +23,22 @@ const DEFAULT_DEV_ORIGINS: readonly string[] = [
   'http://127.0.0.1:3000',
 ];
 
+const VERCEL_HOST_REGEX = /^[a-z0-9.-]+$/;
+const IPV4_REGEX = /^\d{1,3}(?:\.\d{1,3}){3}$/;
+
+function toVercelHttpsOrigin(raw: string | undefined): string | null {
+  if (raw === undefined) {
+    return null;
+  }
+  const host = raw.trim().toLowerCase();
+  const isValidHost =
+    VERCEL_HOST_REGEX.test(host) &&
+    host !== 'localhost' &&
+    host.includes('.') &&
+    !IPV4_REGEX.test(host);
+  return isValidHost ? `https://${host}` : null;
+}
+
 function buildAllowedOrigins(): ReadonlySet<string> {
   const { allowedOrigin } = getEnvConfig();
   const origins = new Set<string>(DEFAULT_DEV_ORIGINS);
@@ -30,6 +46,17 @@ function buildAllowedOrigins(): ReadonlySet<string> {
     const trimmed = entry.trim();
     if (trimmed.length > 0 && trimmed !== '*') {
       origins.add(trimmed);
+    }
+  }
+  const vercelHosts = [
+    process.env['VERCEL_PROJECT_PRODUCTION_URL'],
+    process.env['VERCEL_BRANCH_URL'],
+    process.env['VERCEL_URL'],
+  ];
+  for (const rawHost of vercelHosts) {
+    const origin = toVercelHttpsOrigin(rawHost);
+    if (origin !== null) {
+      origins.add(origin);
     }
   }
   return origins;

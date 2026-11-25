@@ -7,3 +7,5 @@ coverage/
 .vercel/
 testscript/reports/
 .DS_Store
+.vercel
+.env*
