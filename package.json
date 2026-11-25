@@ -6,7 +6,7 @@
     "dev": "tsx dev.ts",
     "dev:server": "tsx server/index.ts",
     "dev:client": "vite",
-    "build": "vite build",
+    "build": "npm run typecheck && vite build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",

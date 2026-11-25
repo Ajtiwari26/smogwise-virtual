@@ -7,7 +7,7 @@ export default defineConfig({
     include: ['testscript/**/*.test.{ts,tsx}'],
     coverage: {
       provider: 'v8',
-      include: ['src/**/*.{ts,tsx}', 'server/**/*.ts'],
+      include: ['src/**/*.{ts,tsx}', 'server/**/*.ts', 'api/**/*.ts'],
       exclude: [
         'testscript/**',
         'dist/**',

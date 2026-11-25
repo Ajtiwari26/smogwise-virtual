@@ -4,7 +4,7 @@
  */
 
 import dotenv from 'dotenv';
-dotenv.config({ override: true });
+dotenv.config();
 
 /** Typed server environment configuration. */
 export interface EnvConfig {
@@ -33,11 +33,12 @@ function parsePort(raw: string | undefined): number {
  */
 export function getEnvConfig(): EnvConfig {
   const port = parsePort(process.env['PORT']);
+  const nodeEnv = process.env['NODE_ENV']?.trim() || 'development';
+  const fallbackOrigin = nodeEnv === 'production' ? '' : DEFAULT_ALLOWED_ORIGIN;
   const rawOrigin = process.env['ALLOWED_ORIGIN']?.trim();
   const allowedOrigin =
-    rawOrigin !== undefined && rawOrigin.length > 0 ? rawOrigin : DEFAULT_ALLOWED_ORIGIN;
+    rawOrigin !== undefined && rawOrigin.length > 0 ? rawOrigin : fallbackOrigin;
   const geminiApiKey = process.env['GEMINI_API_KEY']?.trim() ?? '';
-  const nodeEnv = process.env['NODE_ENV']?.trim() || 'development';
 
   return {
     port,

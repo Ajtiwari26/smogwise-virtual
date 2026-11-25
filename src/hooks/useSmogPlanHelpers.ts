@@ -2,7 +2,7 @@
  * Pure helpers, constants, and race-safe debounced sync effects for useSmogPlan.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type {
   CustomLocation,
@@ -170,18 +170,30 @@ export interface BriefingSyncHandlers {
   readonly setIsBriefingLoading: Dispatch<SetStateAction<boolean>>;
 }
 
+function serializeBriefingKey(profile: UserProfile): string {
+  return JSON.stringify(profile, (key, value: unknown) =>
+    key === 'rwaHouseholds' || key === 'rwaAdoptionRate' ? undefined : value,
+  );
+}
+
 /** Debounced 450ms race-safe POST /api/plan/briefing sync with graceful fallback. */
 export function useDebouncedBriefingSync(
   profile: UserProfile,
   handlers: BriefingSyncHandlers,
 ): void {
   const { generationRef, setBriefing, setIsBriefingLoading } = handlers;
+  const profileRef = useRef<UserProfile>(profile);
+  useEffect(() => {
+    profileRef.current = profile;
+  });
+  const briefingKey = serializeBriefingKey(profile);
+
   useEffect(() => {
     const controller = new AbortController();
     const gen = ++generationRef.current;
     setIsBriefingLoading(true);
     const timer = setTimeout(() => {
-      void postPlanBriefing(profile, controller.signal)
+      void postPlanBriefing(profileRef.current, controller.signal)
         .then((res) => {
           if (gen !== generationRef.current) return;
           setBriefing(res);
@@ -196,5 +208,5 @@ export function useDebouncedBriefingSync(
       clearTimeout(timer);
       controller.abort();
     };
-  }, [profile, generationRef, setBriefing, setIsBriefingLoading]);
+  }, [briefingKey, generationRef, setBriefing, setIsBriefingLoading]);
 }

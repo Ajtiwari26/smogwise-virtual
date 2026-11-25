@@ -43,4 +43,25 @@ describe('Vercel dynamic CORS origin allowlist', () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it('rejects http://localhost:5173 when NODE_ENV=production', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('ALLOWED_ORIGIN', '');
+    vi.stubEnv('VERCEL_PROJECT_PRODUCTION_URL', 'smogwise-virtual.vercel.app');
+
+    const res = await request(createApp())
+      .get('/api/health')
+      .set('Origin', 'http://localhost:5173');
+
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
+  });
+
+  it('handles GET /api/health with 200 via default handler from api/index.js', async () => {
+    const mod = (await import('../../api/index.js')) as {
+      default: Parameters<typeof request>[0];
+    };
+    const res = await request(mod.default).get('/api/health');
+
+    expect(res.status).toBe(200);
+  });
 });

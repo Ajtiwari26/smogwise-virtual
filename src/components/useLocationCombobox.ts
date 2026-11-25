@@ -100,6 +100,25 @@ function useDebouncedLocationSearch(
   }, [query, skipNextSearchRef, setSearchState]);
 }
 
+function resolveNextIndex(
+  key: string,
+  activeIndex: number,
+  length: number,
+): number | undefined {
+  switch (key) {
+    case 'ArrowDown':
+      return (activeIndex + 1) % length;
+    case 'ArrowUp':
+      return (activeIndex - 1 + length) % length;
+    case 'Home':
+      return 0;
+    case 'End':
+      return length - 1;
+    default:
+      return undefined;
+  }
+}
+
 function computeNextKeyState(
   key: string,
   state: SearchState,
@@ -107,14 +126,11 @@ function computeNextKeyState(
   const { results, isOpen, activeIndex } = state;
   if (key === 'Escape') return { nextState: { ...state, isOpen: false, activeIndex: -1 } };
   if (!isOpen || results.length === 0) return undefined;
-  if (key === 'ArrowDown') {
-    return { nextState: { ...state, activeIndex: (activeIndex + 1) % results.length } };
+  const nextIdx = resolveNextIndex(key, activeIndex, results.length);
+  if (nextIdx !== undefined) {
+    return { nextState: { ...state, activeIndex: nextIdx } };
   }
-  if (key === 'ArrowUp') {
-    const next = (activeIndex - 1 + results.length) % results.length;
-    return { nextState: { ...state, activeIndex: next } };
-  }
-  if (key === 'Enter' && activeIndex >= 0 && activeIndex < results.length) {
+  if (key === 'Enter') {
     const chosen = results[activeIndex];
     return chosen !== undefined ? { selected: chosen } : undefined;
   }

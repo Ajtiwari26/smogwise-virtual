@@ -18,8 +18,6 @@ const INDIA_LAT_MAX = 37.5;
 const INDIA_LON_MIN = 68.0;
 const INDIA_LON_MAX = 97.5;
 
-const EXCLUDED_PRESET_IDS = new Set(['lahore_gulberg', 'salt_lake_city']);
-
 const GeocodingRawItemSchema = z.object({
   name: z.string().min(1),
   latitude: z.number().finite(),
@@ -108,9 +106,6 @@ function searchCuratedIndianPresets(cleanQuery: string): readonly LocationSearch
   const needle = normalizeQueryKey(cleanQuery);
   const matches: LocationSearchItem[] = [];
   for (const preset of CITY_PRESETS) {
-    if (EXCLUDED_PRESET_IDS.has(preset.id)) {
-      continue;
-    }
     const hayName = preset.name.toLowerCase();
     const hayState = preset.state.toLowerCase();
     if (hayName.includes(needle) || hayState.includes(needle)) {

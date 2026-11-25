@@ -148,10 +148,12 @@ describe('Cache-Control headers and offline briefing fallback', () => {
   afterEach(() => {
     clearAirQualityCache();
     clearGeocodingCache();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
   it('sets expected Cache-Control headers on public vs private endpoints', async () => {
+    vi.stubEnv('GEMINI_API_KEY', '');
     mockUpstreamApis();
     const app = createApp();
 
@@ -183,6 +185,7 @@ describe('Cache-Control headers and offline briefing fallback', () => {
   });
 
   it('returns deterministic whyActions and citationsUsed on offline POST /api/plan/briefing', async () => {
+    vi.stubEnv('GEMINI_API_KEY', '');
     const app = createApp();
     const res = await request(app).post('/api/plan/briefing').send(VALID_PROFILE);
 

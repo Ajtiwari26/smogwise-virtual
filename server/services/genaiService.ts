@@ -107,25 +107,39 @@ async function callInteractionModel(
   systemInstruction: string,
   input: string,
 ): Promise<string | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<null>((resolve) => {
-    controller.signal.addEventListener('abort', () => resolve(null), { once: true });
+    timer = setTimeout(() => {
+      resolve(null);
+    }, LLM_TIMEOUT_MS);
   });
-  const apiPromise = client.interactions
-    .create({
-      model,
-      system_instruction: systemInstruction,
-      input,
-      store: false,
-    })
-    .then((res) => extractInteractionText(res))
-    .catch(() => null);
+  let apiPromise: Promise<string | null>;
+  try {
+    const rawCall = client.interactions.create(
+      {
+        model,
+        system_instruction: systemInstruction,
+        input,
+        store: false,
+      },
+      { timeout_ms: LLM_TIMEOUT_MS },
+    );
+    apiPromise = Promise.resolve(rawCall)
+      .then((res) => extractInteractionText(res))
+      .catch(() => null);
+  } catch {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+    return null;
+  }
 
   try {
     return await Promise.race([apiPromise, timeoutPromise]);
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -200,9 +214,23 @@ export async function generatePlanBriefing(
   profile: UserProfile,
   report: DeterministicReport,
 ): Promise<PlanBriefingResponse> {
+  const profileCacheFields: Omit<UserProfile, 'rwaHouseholds' | 'rwaAdoptionRate'> = {
+    persona: profile.persona,
+    cityId: profile.cityId,
+    language: profile.language,
+    householdSize: profile.householdSize,
+    hasVulnerableMember: profile.hasVulnerableMember,
+    monthlyBudgetInr: profile.monthlyBudgetInr,
+    roomVolumeM3: profile.roomVolumeM3,
+    commuteMode: profile.commuteMode,
+    commuteDistanceKm: profile.commuteDistanceKm,
+    cookingFuel: profile.cookingFuel,
+    activeHacks: profile.activeHacks,
+    ...(profile.customLocation !== undefined ? { customLocation: profile.customLocation } : {}),
+  };
   const cacheKey = hashCacheKey({
     type: 'briefing',
-    profile,
+    profile: profileCacheFields,
     cityId: report.city.id,
     cpcbAqi: report.cpcbAqi,
     doseAfter: report.exposure.optimizedInhaledUgPerDay,

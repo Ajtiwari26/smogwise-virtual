@@ -39,5 +39,3 @@ export function createApp(): Express {
 
   return app;
 }
-
-/** Default pre-configured Express app instance. */export const app: Express = createApp();

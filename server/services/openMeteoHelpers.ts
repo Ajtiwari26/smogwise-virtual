@@ -14,7 +14,6 @@ import type {
 import { sanitizeLocationText } from '../middleware/locationGuard.js';
 
 const EARTH_RADIUS_KM = 6371;
-const EXCLUDED_PRESET_IDS = new Set(['lahore_gulberg', 'salt_lake_city']);
 const SHORT_ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const FULL_NAIVE_ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/;
 
@@ -81,9 +80,6 @@ export function findNearestIndianPreset(lat: number, lon: number): {
   let nearestPreset = CITY_PRESETS[0] as CityPreset;
   let minDistance = Number.POSITIVE_INFINITY;
   for (const preset of CITY_PRESETS) {
-    if (EXCLUDED_PRESET_IDS.has(preset.id)) {
-      continue;
-    }
     const dist = haversineKm(lat, lon, preset.lat, preset.lon);
     if (dist < minDistance) {
       minDistance = dist;

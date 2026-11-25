@@ -53,8 +53,8 @@ function toVercelHttpsOrigin(raw: string | undefined): string | null {
 }
 
 function buildAllowedOrigins(): ReadonlySet<string> {
-  const { allowedOrigin } = getEnvConfig();
-  const origins = new Set<string>(DEFAULT_DEV_ORIGINS);
+  const { allowedOrigin, nodeEnv } = getEnvConfig();
+  const origins = new Set<string>(nodeEnv !== 'production' ? DEFAULT_DEV_ORIGINS : []);
   for (const entry of allowedOrigin.split(',')) {
     const trimmed = entry.trim();
     if (trimmed.length > 0 && trimmed !== '*') {
@@ -205,7 +205,7 @@ function isMalformedJsonError(err: unknown): boolean {
   }
   if (typeof err === 'object' && err !== null) {
     const e = err as HttpErrorLike;
-    return e.type === 'entity.parse.failed' || e.status === 400;
+    return e.type === 'entity.parse.failed';
   }
   return false;
 }

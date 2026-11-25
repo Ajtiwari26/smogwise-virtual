@@ -196,7 +196,7 @@ export function LocationSearchCombobox({
         onSelect={ctrl.commitSelection}
       />
       {ctrl.searchState.isSearching && (
-        <p className="text-xs text-slate-700">
+        <p role="status" aria-live="polite" className="text-xs text-slate-700">
           {isHindi ? 'स्थान खोजे जा रहे हैं...' : 'Searching Indian locations...'}
         </p>
       )}

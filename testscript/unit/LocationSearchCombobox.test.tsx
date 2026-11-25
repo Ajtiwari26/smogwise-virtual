@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocationSearchCombobox } from '../../src/components/LocationSearchCombobox.js';
+import { CITY_PRESETS } from '../../src/domain/cityPresets.js';
 import type { LocationSearchItem } from '../../src/domain/types.js';
 import * as apiClient from '../../src/services/apiClient.js';
 
@@ -131,6 +132,80 @@ describe('LocationSearchCombobox keyboard navigation and dismissal', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(onSelectLocation).toHaveBeenCalledWith(jaipurResults[0]);
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+});
+
+describe('LocationSearchCombobox End/Home navigation, pending status, and city presets', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('supports End and Home key navigation inside listbox', async () => {
+    vi.spyOn(apiClient, 'searchLocations').mockResolvedValue(jaipurResults);
+
+    render(
+      <LocationSearchCombobox
+        language="en"
+        customLocation={undefined}
+        onSelectLocation={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'Jaipur' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+
+    expect(screen.getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(input, { key: 'End' });
+    expect(screen.getAllByRole('option')[1]).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(input, { key: 'Home' });
+    expect(screen.getAllByRole('option')[0]).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('renders Searching Indian locations... inside role=status while searchLocations is pending', async () => {
+    let resolveSearch!: (items: readonly LocationSearchItem[]) => void;
+    vi.spyOn(apiClient, 'searchLocations').mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve;
+        }),
+    );
+
+    render(
+      <LocationSearchCombobox
+        language="en"
+        customLocation={undefined}
+        onSelectLocation={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'Jaipur' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(350);
+    });
+
+    const statusEls = screen.getAllByRole('status');
+    expect(statusEls.some((el) => el.textContent?.includes('Searching Indian locations...'))).toBe(
+      true,
+    );
+
+    await act(async () => {
+      resolveSearch(jaipurResults);
+    });
+  });
+
+  it('verifies CITY_PRESETS has no lahore_gulberg or salt_lake_city', () => {
+    const presetIds = CITY_PRESETS.map((preset) => preset.id);
+    expect(presetIds).not.toContain('lahore_gulberg');
+    expect(presetIds).not.toContain('salt_lake_city');
   });
 });
 

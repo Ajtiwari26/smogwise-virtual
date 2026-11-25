@@ -82,7 +82,9 @@ const DIRECT_RULES: readonly PatternRule[] = [
     reason: 'instruction_override',
     regex: new RegExp(
       '(ignore|disregard)\\s+(all\\s+)?(previous|prior|above|safety)?\\s*'
-        + '(instructions|rules)|system\\s+(prompt|instructions)',
+        + '(instructions|rules)|system\\s+(prompt|instructions)'
+        + '|forget\\s+what\\s+you\\s+were\\s+told'
+        + '|reveal\\s+(?:your\\s+)?(?:system|internal)\\s+instructions',
       'i',
     ),
   },
@@ -96,7 +98,11 @@ const DIRECT_RULES: readonly PatternRule[] = [
   },
   {
     reason: 'medical_or_dan_jailbreak',
-    regex: /\b(you\s+are\s+dan|prescribe|prednisone|dosage|mg\s+dose)\b/i,
+    regex: new RegExp(
+      '\\b(you\\s+are\\s+dan|prescribe|prednisone|dosage|mg\\s+dose'
+        + '|inhaler|steroid|tablet|milligrams)\\b',
+      'i',
+    ),
   },
   {
     reason: 'xss_payload',

@@ -248,3 +248,42 @@ describe('askGroundedAssistant and buildLocationContextTag', () => {
     expect(tag).toContain('city="Delhi &amp; NCR &lt;East&gt;"');
   });
 });
+
+describe('generatePlanBriefing RWA cache invariance and interaction timeout options', () => {
+  beforeEach(() => {
+    clearBriefingCache();
+    mockInteractionsCreate.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearBriefingCache();
+  });
+
+  it('reuses cached briefing across rwaHouseholds and rwaAdoptionRate changes and passes timeout_ms 4500', async () => {
+    mockEnv(BASE_ENV.geminiApiKey);
+    mockInteractionsCreate.mockResolvedValue({
+      output_text: JSON.stringify({
+        headline: 'RWA Invariant Briefing',
+        summary: 'Indoor filtration lowers exposure [CALC:DOSE_AFTER] per [AQ:SOURCE].',
+        whyActions: ['HEPA filtration reduces indoor particulate concentration.'],
+      }),
+    });
+
+    const baseProfile = makeProfile({ rwaHouseholds: 10, rwaAdoptionRate: 0.2 });
+    const baseReport = computeFullPlan(baseProfile).report;
+    const first = await generatePlanBriefing(baseProfile, baseReport);
+
+    expect(first.mode).toBe('gemini_interactions');
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(1);
+    const secondArg = mockInteractionsCreate.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(secondArg).toEqual({ timeout_ms: 4500 });
+
+    const updatedProfile = makeProfile({ rwaHouseholds: 250, rwaAdoptionRate: 0.9 });
+    const updatedReport = computeFullPlan(updatedProfile).report;
+    const second = await generatePlanBriefing(updatedProfile, updatedReport);
+
+    expect(second).toEqual(first);
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(1);
+  });
+});
