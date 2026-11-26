@@ -2,7 +2,7 @@ import React from 'react';
 import type { LanguageCode, PersonaType } from '../domain/types.js';
 
 /** Public Evaluator Sandbox Test Password matching server/config/authAccounts.ts. */
-export const EVALUATOR_SANDBOX_SECRET_TOKEN = 'SmogWise#Eval2026';
+export const SANDBOX_DEMO_PASSCODE = 'SmogWise#Eval2026';
 
 /** Evaluator sandbox account entry for 1-click sign-in and credential reference. */
 export interface EvaluatorSandboxAccount {
@@ -86,7 +86,7 @@ export const EvaluatorSandboxCard: React.FC<EvaluatorSandboxCardProps> = React.m
               key={acc.email}
               type="button"
               disabled={isSubmitting}
-              onClick={() => onQuickLogin(acc.email, EVALUATOR_SANDBOX_SECRET_TOKEN)}
+              onClick={() => onQuickLogin(acc.email, SANDBOX_DEMO_PASSCODE)}
               className="flex flex-col items-start rounded-lg border border-slate-400 bg-slate-50 px-3.5 py-2.5 text-left transition hover:border-teal-800 hover:bg-teal-50 focus-visible:ring-2 focus-visible:ring-teal-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <span className="text-sm font-bold text-slate-900">
@@ -102,7 +102,7 @@ export const EvaluatorSandboxCard: React.FC<EvaluatorSandboxCardProps> = React.m
           <p className="font-bold text-slate-900">
             {isHi ? 'सार्वजनिक मूल्यांकन सैंडबॉक्स पासवर्ड:' : 'Public Evaluator Sandbox Test Password:'}{' '}
             <code className="rounded bg-white px-1.5 py-0.5 font-mono font-semibold text-teal-900">
-              {EVALUATOR_SANDBOX_SECRET_TOKEN}
+              {SANDBOX_DEMO_PASSCODE}
             </code>
           </p>
           <p className="mt-1.5 text-slate-700">

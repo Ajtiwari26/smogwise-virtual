@@ -294,7 +294,11 @@ function LoginGateBody({
 }: LoginGateBodyProps): React.ReactElement {
   const isHi = language === 'hi';
   return (
-    <main id="main-content" className="mx-auto max-w-6xl space-y-5 px-4 py-6">
+    <main
+      id="main-content"
+      tabIndex={-1}
+      className="mx-auto max-w-6xl space-y-5 px-4 py-6 focus:outline-none"
+    >
       <GatewayStatusBanner isHi={isHi} isCheckingSession={isCheckingSession} />
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <CredentialFormSection

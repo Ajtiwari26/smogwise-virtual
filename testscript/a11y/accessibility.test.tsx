@@ -31,7 +31,7 @@ describe('App WCAG 2.1 AA landmarks, labels & bilingual semantics', () => {
     expect(skipLink).not.toBeNull();
 
     expect(container.querySelector('header')).not.toBeNull();
-    expect(container.querySelector('main#main-content')).not.toBeNull();
+    expect(container.querySelector('main#main-content')?.getAttribute('tabindex')).toBe('-1');
     expect(container.querySelector('nav')).not.toBeNull();
     expect(container.querySelector('footer')).not.toBeNull();
   });
@@ -114,6 +114,7 @@ describe('App authenticated session lifecycle & landmarks', () => {
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /Sign Out/i })).not.toBeNull();
     });
+    expect(container.querySelector('main#main-content')?.getAttribute('tabindex')).toBe('-1');
     expect(container.querySelector('#impact')).not.toBeNull();
     expect(document.body.textContent ?? '').toContain('Direct Health & Emissions Impact');
 

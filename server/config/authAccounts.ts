@@ -45,7 +45,7 @@ const STORED_ACCOUNTS: readonly StoredAuthAccount[] = [
     name: 'Lucknow Senior Evaluator',
     personaId: 'sensitive_household',
     defaultLang: 'hi',
-    defaultCityId: 'lucknow_gomti_nagar',
+    defaultCityId: 'lucknow_gomtinagar',
     salt: '171be61863b961e3a3ffc6fc15215773',
     passwordHash:
       '846a4a9f64ff972c50346bc93302df973139afeed76d7ff535bf694c99dc662cc5efabe100723bbca4deb95d96ed657febc0a7e051b1353bd66edf7a94199089',

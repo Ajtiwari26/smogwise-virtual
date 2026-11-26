@@ -176,6 +176,7 @@ export interface IAQHackDetail {
   readonly instructionsHi: string;
   readonly monthlyCostInr: number;
   readonly doseImpactLabel: string;
+  readonly doseImpactLabelHi?: string;
   readonly withinBudget: boolean;
   readonly isActive: boolean;
 }

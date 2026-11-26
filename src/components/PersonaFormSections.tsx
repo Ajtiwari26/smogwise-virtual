@@ -215,6 +215,8 @@ export const LifestyleAndPersonaFields: React.FC<{
   );
 });
 
+const CUSTOM_CITY_OPTION = '__custom_location__';
+
 export const LocationSectionFields: React.FC<{
   readonly profile: UserProfile;
   readonly isHi: boolean;
@@ -226,11 +228,13 @@ export const LocationSectionFields: React.FC<{
   onSelectLocation,
   onSelectPresetCity,
 }) {
+  const customLoc = profile.customLocation;
+  const selectValue = customLoc !== undefined ? CUSTOM_CITY_OPTION : profile.cityId;
   return (
     <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
       <LocationSearchCombobox
         language={profile.language}
-        customLocation={profile.customLocation}
+        customLocation={customLoc}
         onSelectLocation={onSelectLocation}
       />
       <div>
@@ -239,10 +243,19 @@ export const LocationSectionFields: React.FC<{
         </label>
         <select
           id="form-city-select"
-          value={profile.cityId}
-          onChange={(e) => onSelectPresetCity(e.target.value)}
+          value={selectValue}
+          onChange={(e) => {
+            if (e.target.value !== CUSTOM_CITY_OPTION) {
+              onSelectPresetCity(e.target.value);
+            }
+          }}
           className={INPUT_CLS}
         >
+          {customLoc !== undefined && (
+            <option value={CUSTOM_CITY_OPTION}>
+              {isHi ? `कस्टम: ${customLoc.name}` : `Custom: ${customLoc.name}`}
+            </option>
+          )}
           {CITY_PRESETS.map((c) => (
             <option key={c.id} value={c.id}>{isHi ? c.nameHi : c.name}</option>
           ))}
@@ -282,7 +295,9 @@ export const HackChecklist: React.FC<{
                 <span className="block font-semibold">
                   {isHi ? hack.nameHi : hack.name} · ₹{hack.monthlyCostInr}/mo
                 </span>
-                <span className="block text-slate-700">{hack.doseImpactLabel}</span>
+                <span className="block text-slate-700">
+                  {isHi ? (hack.doseImpactLabelHi ?? hack.doseImpactLabel) : hack.doseImpactLabel}
+                </span>
               </label>
             </div>
           );

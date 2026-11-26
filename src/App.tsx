@@ -210,7 +210,11 @@ const AuthenticatedWorkspace: React.FC<AuthenticatedWorkspaceProps> = function W
         onSignOut={onSignOut}
       />
 
-      <main id="main-content" className="mx-auto max-w-7xl space-y-4 px-4 py-5">
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="mx-auto max-w-7xl space-y-4 px-4 py-5 focus:outline-none"
+      >
         <SmogAlertBanner {...buildBannerProps(state)} />
         <ErrorBoundary language={profile.language}>
           <AppMainColumns state={state} />
@@ -231,12 +235,24 @@ export const App: React.FC = function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [isCheckingSession, setIsCheckingSession] = useState<boolean>(true);
   const [gateLanguage, setGateLanguage] = useState<LanguageCode>('en');
+  const hasInteractedAuthRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (authUser === null) {
       document.documentElement.lang = gateLanguage;
     }
   }, [authUser, gateLanguage]);
+
+  useEffect(() => {
+    if (!hasInteractedAuthRef.current) {
+      return undefined;
+    }
+    const targetId = authUser !== null ? 'main-content' : 'login-email';
+    const rafId = window.requestAnimationFrame(() => {
+      document.getElementById(targetId)?.focus();
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [authUser]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -259,10 +275,16 @@ export const App: React.FC = function App() {
     return () => controller.abort();
   }, []);
 
+  const handleLoginSuccess = useCallback((user: AuthUser): void => {
+    hasInteractedAuthRef.current = true;
+    setAuthUser(user);
+  }, []);
+
   const handleSignOut = useCallback((): void => {
     void logoutSession()
       .catch(() => undefined)
       .finally(() => {
+        hasInteractedAuthRef.current = true;
         setAuthUser(null);
       });
   }, []);
@@ -273,7 +295,7 @@ export const App: React.FC = function App() {
         language={gateLanguage}
         isCheckingSession={isCheckingSession}
         onLanguageChange={setGateLanguage}
-        onLoginSuccess={setAuthUser}
+        onLoginSuccess={handleLoginSuccess}
       />
     );
   }

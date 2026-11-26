@@ -17,6 +17,7 @@ import {
   getUserPreferences,
   setUserPreferences,
 } from '../../server/services/preferencesStore.js';
+import { CITY_PRESETS } from '../../src/domain/cityPresets.js';
 import type { UserProfile } from '../../src/domain/types.js';
 
 const TEST_AUTH_SECRET = 'unit-test-hmac-secret-key-for-smogwise-auth-2026';
@@ -79,6 +80,25 @@ describe('authAccounts & verifyCredentials', () => {
     expect(verifyCredentials('family.eval@smogwise.in', 'WrongPassword#2026')).toBeNull();
     expect(verifyCredentials('family.eval@smogwise.in', '')).toBeNull();
     expect(verifyCredentials('missing.user@smogwise.in', 'SmogWise#Eval2026')).toBeNull();
+  });
+
+  it('authenticates all 5 evaluator emails with valid CITY_PRESETS defaultCityId', () => {
+    const presetIds = new Set(CITY_PRESETS.map((c) => c.id));
+    const emails = [
+      'family.eval@smogwise.in',
+      'senior.eval@smogwise.in',
+      'rwa.eval@smogwise.in',
+      'commuter.eval@smogwise.in',
+      'student.eval@smogwise.in',
+    ];
+    for (const email of emails) {
+      const user = verifyCredentials(email, 'SmogWise#Eval2026');
+      expect(user).not.toBeNull();
+      expect(presetIds.has(user?.defaultCityId ?? '')).toBe(true);
+      if (email === 'senior.eval@smogwise.in') {
+        expect(user?.defaultCityId).toBe('lucknow_gomtinagar');
+      }
+    }
   });
 });
 

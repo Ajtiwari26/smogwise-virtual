@@ -41,10 +41,19 @@ const ALT_COMMUTE_OPTIONS: readonly {
   readonly hi: string;
 }[] = [
   { id: 'metro_bus', en: 'Metro / Bus', hi: 'मेट्रो / बस' },
+  { id: 'two_wheeler', en: 'Two-Wheeler', hi: 'दोपहिया वाहन' },
   { id: 'carpool', en: 'Carpool', hi: 'कारपूल' },
   { id: 'wfh_walk', en: 'WFH / Walk', hi: 'घर से काम / पैदल' },
   { id: 'petrol_car', en: 'Petrol Car', hi: 'पेट्रोल कार' },
 ];
+
+function pickDefaultAltCommute(mode: CommuteMode): CommuteMode {
+  return mode === 'metro_bus' ? 'wfh_walk' : 'metro_bus';
+}
+
+function pickDefaultAltFuel(fuel: CookingFuel): CookingFuel {
+  return fuel === 'induction' ? 'lpg' : 'induction';
+}
 
 const ALT_FUEL_OPTIONS: readonly {
   readonly id: CookingFuel;
@@ -129,8 +138,12 @@ const WhatIfControls: React.FC<{
 export const WhatIfComparator: React.FC<WhatIfComparatorProps> = React.memo(
   function WhatIfComparator({ profile, liveAq }) {
     const isHi = profile.language === 'hi';
-    const [altCommute, setAltCommute] = useState<CommuteMode>('metro_bus');
-    const [altFuel, setAltFuel] = useState<CookingFuel>('induction');
+    const [altCommute, setAltCommute] = useState<CommuteMode>(() =>
+      pickDefaultAltCommute(profile.commuteMode),
+    );
+    const [altFuel, setAltFuel] = useState<CookingFuel>(() =>
+      pickDefaultAltFuel(profile.cookingFuel),
+    );
     const [addCorsiBox, setAddCorsiBox] = useState<boolean>(true);
 
     const comparison = useMemo(() => {

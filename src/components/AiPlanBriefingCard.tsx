@@ -125,8 +125,8 @@ export function AiPlanBriefingCard({
       <div className="mt-3">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">{whyTitle}</p>
         <ul className="mt-1.5 list-disc space-y-1 pl-5 text-sm text-slate-700">
-          {view.whyActions.map((item) => (
-            <li key={item}>{item}</li>
+          {view.whyActions.map((item, idx) => (
+            <li key={`${String(idx)}-${item}`}>{item}</li>
           ))}
         </ul>
       </div>

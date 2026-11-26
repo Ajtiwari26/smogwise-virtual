@@ -53,6 +53,7 @@ const SAMPLE_HACKS: readonly IAQHackDetail[] = [
     instructionsHi: 'दरवाज़े की दरारें सील करें।',
     monthlyCostInr: 150,
     doseImpactLabel: '-28% outdoor infiltration',
+    doseImpactLabelHi: '-28% बाहरी धूल प्रवेश',
     withinBudget: true,
     isActive: true,
   },
@@ -179,7 +180,11 @@ describe('WhatIfComparator', () => {
       commuteMode: 'petrol_car',
       cookingFuel: 'biomass_chulha',
     });
-    const { rerender } = render(<WhatIfComparator profile={baseProfile} liveAq={undefined} />);
+    const { container, rerender } = render(
+      <WhatIfComparator profile={baseProfile} liveAq={undefined} />,
+    );
+    const commuteSelect = container.querySelector('select#whatif-commute');
+    expect(commuteSelect?.querySelector("option[value='two_wheeler']")).not.toBeNull();
     const initialDose = screen.getAllByText(/ug\/day/)[0]?.textContent ?? '';
     fireEvent.change(screen.getByLabelText('Alternative Commute'), {
       target: { value: 'petrol_car' },
@@ -380,6 +385,33 @@ describe('PersonaForm', () => {
     const personaSelect = screen.getByLabelText('Household Persona');
     expect(personaSelect.querySelector('option[value="office_commuter"]')).not.toBeNull();
     expect(personaSelect.querySelector('option[value="outdoor_student"]')).not.toBeNull();
+  });
+
+  it('renders customLocation option and Hindi doseImpactLabelHi in HackChecklist', () => {
+    const customLocation = { name: 'Jaipur', state: 'Rajasthan', lat: 26.9124, lon: 75.7873 };
+    const { container, rerender } = render(
+      <PersonaForm
+        profile={makeProfile({ language: 'en', customLocation })}
+        iaqHacks={SAMPLE_HACKS}
+        onUpdate={vi.fn()}
+        onToggleHack={vi.fn()}
+      />,
+    );
+    const customOpt = container.querySelector(
+      "#form-city-select option[value='__custom_location__']",
+    );
+    expect(customOpt).not.toBeNull();
+    expect(customOpt?.textContent).toBe('Custom: Jaipur');
+
+    rerender(
+      <PersonaForm
+        profile={makeProfile({ language: 'hi', customLocation })}
+        iaqHacks={SAMPLE_HACKS}
+        onUpdate={vi.fn()}
+        onToggleHack={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('-28% बाहरी धूल प्रवेश')).toBeInTheDocument();
   });
 });
 

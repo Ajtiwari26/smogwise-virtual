@@ -128,6 +128,7 @@ export interface IAQHackSpec {
   readonly id: IAQHackId;
   readonly monthlyCostInr: number;
   readonly doseImpactLabel: string;
+  readonly doseImpactLabelHi: string;
   readonly name: string;
   readonly nameHi: string;
   readonly instructions: string;
@@ -140,6 +141,7 @@ export const IAQ_HACK_SPECS: Readonly<Record<IAQHackId, IAQHackSpec>> = {
     id: 'ventilation_window',
     monthlyCostInr: 0,
     doseImpactLabel: '10-18% lower indoor peak',
+    doseImpactLabelHi: 'इनडोर पीक 10-18% कम',
     name: 'Afternoon Ventilation Window',
     nameHi: 'दोपहर वेंटिलेशन विंडो',
     instructions: 'Open cross-ventilation windows only between 1:00 PM and 4:00 PM.',
@@ -149,6 +151,7 @@ export const IAQ_HACK_SPECS: Readonly<Record<IAQHackId, IAQHackSpec>> = {
     id: 'wet_mopping',
     monthlyCostInr: 0,
     doseImpactLabel: '8-15% less resuspended dust',
+    doseImpactLabelHi: 'उड़ती धूल 8-15% कम',
     name: 'Daily Wet Mopping',
     nameHi: 'रोज़ गीला पोंछा',
     instructions: 'Replace dry sweeping with damp mopping to trap settled PM2.5.',
@@ -158,6 +161,7 @@ export const IAQ_HACK_SPECS: Readonly<Record<IAQHackId, IAQHackSpec>> = {
     id: 'window_sealing',
     monthlyCostInr: 250,
     doseImpactLabel: '30-45% less smog infiltration',
+    doseImpactLabelHi: 'स्मॉग प्रवेश 30-45% कम',
     name: 'Window & Door Draught Sealing',
     nameHi: 'खिड़की और दरवाज़े की सीलिंग',
     instructions: 'Apply foam weather-stripping tape around balcony doors and frames.',
@@ -167,6 +171,7 @@ export const IAQ_HACK_SPECS: Readonly<Record<IAQHackId, IAQHackSpec>> = {
     id: 'n95_mask',
     monthlyCostInr: 450,
     doseImpactLabel: '85% outdoor commute filtration',
+    doseImpactLabelHi: 'बाहरी यात्रा में 85% सुरक्षा',
     name: 'Fitted N95 Respirator',
     nameHi: 'फिटेड N95 मास्क',
     instructions: 'Wear a snug N95 mask during morning and evening outdoor travel.',
@@ -176,6 +181,7 @@ export const IAQ_HACK_SPECS: Readonly<Record<IAQHackId, IAQHackSpec>> = {
     id: 'corsi_rosenthal_box',
     monthlyCostInr: 950,
     doseImpactLabel: '55-70% indoor PM2.5 drop',
+    doseImpactLabelHi: 'इनडोर PM2.5 55-70% कम',
     name: 'DIY Corsi-Rosenthal Box',
     nameHi: 'DIY कोर्सी-रोसेंथल एयर बॉक्स',
     instructions: 'Tape MERV-13 filters to a box fan for high-CADR low-cost filtration.',
@@ -185,6 +191,7 @@ export const IAQ_HACK_SPECS: Readonly<Record<IAQHackId, IAQHackSpec>> = {
     id: 'hepa_purifier',
     monthlyCostInr: 2200,
     doseImpactLabel: '65-80% indoor PM2.5 drop',
+    doseImpactLabelHi: 'इनडोर PM2.5 65-80% कम',
     name: 'True HEPA Air Purifier',
     nameHi: 'ट्रू HEPA एयर प्यूरीफायर',
     instructions: 'Run a true HEPA H13 purifier continuously in the main bedroom.',

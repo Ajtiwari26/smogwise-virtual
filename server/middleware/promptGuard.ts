@@ -152,7 +152,8 @@ const DIRECT_RULES: readonly PatternRule[] = [
   },
 ];
 
-const BASE64_TOKEN_RE = /\b[A-Za-z0-9+/]{16,}={0,2}\b/g;
+const BASE64_TOKEN_RE =
+  /(?:^|[^A-Za-z0-9+/])([A-Za-z0-9+/]{16,}={0,2})(?:$|[^A-Za-z0-9+/=])/g;
 const BASE64_THREAT_RE = /ignore|rules|secret|system|prompt|api_key|password|leak/i;
 
 function hasMarkdownImageExfil(text: string): boolean {
@@ -165,11 +166,11 @@ function hasMarkdownImageExfil(text: string): boolean {
 }
 
 function hasBase64Override(text: string): boolean {
-  const matches = text.match(BASE64_TOKEN_RE);
-  if (matches === null) {
-    return false;
-  }
-  for (const token of matches) {
+  for (const match of text.matchAll(BASE64_TOKEN_RE)) {
+    const token = match[1];
+    if (token === undefined) {
+      continue;
+    }
     try {
       const decoded = Buffer.from(token, 'base64').toString('utf8');
       if (BASE64_THREAT_RE.test(decoded)) {

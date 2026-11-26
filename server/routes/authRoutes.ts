@@ -98,7 +98,7 @@ export function createAuthRouter(authLimiter: RequestHandler): Router {
   const router = express.Router();
 
   router.post('/auth/login', authLimiter, handleLogin);
-  router.post('/auth/logout', handleLogout);
+  router.post('/auth/logout', authLimiter, handleLogout);
   router.get('/auth/session', handleSession);
   router.get('/user/preferences', requireAuth, handleGetPreferences);
   router.put('/user/preferences', requireAuth, handlePutPreferences);

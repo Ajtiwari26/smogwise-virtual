@@ -167,7 +167,9 @@ export function buildBriefingUserPrompt(
       title: isHi ? item.nameHi : item.name,
       instructions: isHi ? item.instructionsHi : item.instructions,
       monthlyCostInr: item.monthlyCostInr,
-      doseImpactLabel: item.doseImpactLabel,
+      doseImpactLabel: isHi
+        ? (item.doseImpactLabelHi ?? item.doseImpactLabel)
+        : item.doseImpactLabel,
       withinBudget: item.withinBudget,
     }));
   const payload = JSON.stringify({
@@ -213,10 +215,11 @@ export function buildOfflineBriefing(
   const whyActions = top.map((h) => {
     const title = isHi ? h.nameHi : h.name;
     const guide = isHi ? h.instructionsHi : h.instructions;
+    const impact = isHi ? (h.doseImpactLabelHi ?? h.doseImpactLabel) : h.doseImpactLabel;
     return isHi
-      ? `${title}: ${guide} — ${city} परिवार की सुरक्षा (${h.doseImpactLabel}) [CALC:DOSE_AFTER]।`
+      ? `${title}: ${guide} — ${city} परिवार की सुरक्षा (${impact}) [CALC:DOSE_AFTER]।`
       : `${title}: ${guide} — protects your ${members}-member ${city} home ` +
-          `(${h.doseImpactLabel}) [CALC:DOSE_AFTER].`;
+          `(${impact}) [CALC:DOSE_AFTER].`;
   });
   return { headline, summary, whyActions };
 }

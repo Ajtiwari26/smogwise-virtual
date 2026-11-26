@@ -144,6 +144,7 @@ export function rankIAQHacksByBudget(profile: UserProfile): readonly IAQHackDeta
       instructionsHi: spec.instructionsHi,
       monthlyCostInr: spec.monthlyCostInr,
       doseImpactLabel: spec.doseImpactLabel,
+      doseImpactLabelHi: spec.doseImpactLabelHi,
       withinBudget: spec.monthlyCostInr <= budget,
       isActive: profile.activeHacks.includes(id),
     };
