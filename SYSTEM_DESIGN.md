@@ -29,7 +29,7 @@
 └───────────────────────────────┬─────────────────────────────────────────┘
                                 │
         ┌───────────────────────┴───────────────────────┐
-        ▼ (Client-side instant recalculation)           ▼ (/api/auth/*, /api/user/preferences, /api/plan, /api/plan/briefing, /api/what-if, /api/ai/ask, /api/aqi)
+        ▼ (Client-side instant recalculation)           ▼ (/api/auth/*, /api/user/preferences, /api/locations/search, /api/aqi, /api/plan, /api/plan/briefing, /api/what-if, /api/ai/ask)
 ┌───────────────────────────────────┐   ┌─────────────────────────────────┐
 │  Tier 1: Deterministic Engine     │   │  Express 5 + Helmet + Zod API   │
 │  (src/domain/* — pure TS)         │   │  (server/ & api/index.ts)       │
@@ -82,7 +82,7 @@ All domain modules are pure TypeScript functions with zero React, DOM, Node, or 
 - **Caching & Upstream Coalescing:** Applies a `Cache-Control` split (`public, s-maxage=300, stale-while-revalidate=600` for preset city AQ vs `private, no-store` for coordinate queries, plans, briefings, and Q&A) and bounded singleflight deduplication (`MAX_INFLIGHT = 100`) to prevent upstream stampedes.
 - **Authentication Gateway & Session Security (`LoginGate`):** Unauthenticated visitors land on `LoginGate` (`POST /api/auth/login`, `GET /api/auth/session`, `POST /api/auth/logout`) with zero client-side offline login bypasses. Credentials are verified server-side using salted `crypto.scryptSync` and constant-time `crypto.timingSafeEqual`, issuing 24-hour `HMAC-SHA256` signed `HttpOnly`, `SameSite=Lax` (`Secure` in production) cookies signed with `AUTH_SECRET` (env or CSPRNG fallback).
 - **User-Scoped Preference Isolation:** `GET /api/user/preferences` and `PUT /api/user/preferences` require a valid `HMAC-SHA256` session cookie and isolate saved `UserProfile` configurations inside a bounded server-side LRU store keyed strictly by authenticated `user.id`.
-- **Rate Limiting:** Dedicated `authLimiter` (`20 req / 15 min` per IP) protects `/api/auth/*` against credential brute-forcing, while isolated route-group rate limiters in `server/middleware/security.ts` cap endpoints per 15 min per IP (`PLAN`: 120, `GEO`: 60, `HEALTH`: 60, `AI_ASK`: 40, `BRIEFING`: 40, `AUTH`: 20) (note: on Vercel serverless deployments, in-memory rate-limit counters are per-instance and reset across cold starts).
+- **Rate Limiting:** Isolated per-IP 15-minute route-group limiters in `server/middleware/security.ts` cap credential actions (`POST /api/auth/login`, `POST /api/auth/logout` via `AUTH: 20`), session/preference endpoints (`GET /api/auth/session`, `/api/user/preferences` via `SESSION: 120`), core planning/AQI (`POST /api/plan`, `/api/what-if`, `GET /api/aqi` via `PLAN: 120`), geocoding & liveness (`GEO: 60`, `HEALTH: 60`), and AI synthesis (`BRIEFING: 40`, `AI_ASK: 40`) (note: on Vercel serverless deployments, in-memory rate-limit counters are per-instance and reset across cold starts).
 - **Strict Input Validation & Dependency Hygiene:** All incoming payloads are validated with `zod` (`^4.6.7`) returning sanitized errors before reaching domain or AI handlers, paired with 0-CVE npm dependencies.
 - **Zero Secret Exposure:** `GEMINI_API_KEY` and `AUTH_SECRET` live strictly in server environment variables (`.env`), never bundled into `VITE_*` client assets.
 

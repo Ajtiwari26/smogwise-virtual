@@ -217,12 +217,13 @@ export function createApiRouter(): Router {
     healthLimiter,
     geoLimiter,
     planLimiter,
+    sessionLimiter,
     aiAskLimiter,
     briefingLimiter,
     authLimiter,
   } = createRouteLimiters();
 
-  router.use(createAuthRouter(authLimiter));
+  router.use(createAuthRouter(authLimiter, sessionLimiter));
   router.get('/health', healthLimiter, handleHealth);
   router.get('/locations/search', geoLimiter, (req, res, next) => {
     void handleLocationsSearch(req, res, next);

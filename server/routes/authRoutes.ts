@@ -94,14 +94,17 @@ function handlePutPreferences(req: Request, res: Response, next: NextFunction): 
 }
 
 /** Creates the Express router handling authentication and protected user preferences. */
-export function createAuthRouter(authLimiter: RequestHandler): Router {
+export function createAuthRouter(
+  authLimiter: RequestHandler,
+  sessionLimiter: RequestHandler = authLimiter,
+): Router {
   const router = express.Router();
 
   router.post('/auth/login', authLimiter, handleLogin);
   router.post('/auth/logout', authLimiter, handleLogout);
-  router.get('/auth/session', handleSession);
-  router.get('/user/preferences', requireAuth, handleGetPreferences);
-  router.put('/user/preferences', requireAuth, handlePutPreferences);
+  router.get('/auth/session', sessionLimiter, handleSession);
+  router.get('/user/preferences', sessionLimiter, requireAuth, handleGetPreferences);
+  router.put('/user/preferences', sessionLimiter, requireAuth, handlePutPreferences);
 
   return router;
 }

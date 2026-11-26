@@ -50,7 +50,7 @@ export const UserProfileSchema = z.object({
   householdSize: z.number().int().min(1).max(20),
   hasVulnerableMember: z.boolean(),
   monthlyBudgetInr: z.number().min(0).max(500_000),
-  roomVolumeM3: z.number().min(10).max(500),
+  roomVolumeM3: z.number().min(12).max(500),
   commuteMode: z.enum(COMMUTE_MODES),
   commuteDistanceKm: z.number().min(0).max(200),
   cookingFuel: z.enum(COOKING_FUELS),

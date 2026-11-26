@@ -134,17 +134,45 @@ const WhatIfControls: React.FC<{
   );
 });
 
+function resolveAlternative<T>(
+  override: { readonly base: T; readonly alt: T } | null,
+  currentBase: T,
+  pickDefault: (mode: T) => T,
+): T {
+  if (override !== null && override.base === currentBase) {
+    return override.alt;
+  }
+  return pickDefault(currentBase);
+}
+
 /** Side-by-side 2-choice scenario comparator computing instant Tier 1 deltas. */
 export const WhatIfComparator: React.FC<WhatIfComparatorProps> = React.memo(
   function WhatIfComparator({ profile, liveAq }) {
     const isHi = profile.language === 'hi';
-    const [altCommute, setAltCommute] = useState<CommuteMode>(() =>
-      pickDefaultAltCommute(profile.commuteMode),
-    );
-    const [altFuel, setAltFuel] = useState<CookingFuel>(() =>
-      pickDefaultAltFuel(profile.cookingFuel),
-    );
+    const [commuteOverride, setCommuteOverride] = useState<{
+      readonly base: CommuteMode;
+      readonly alt: CommuteMode;
+    } | null>(null);
+    const [fuelOverride, setFuelOverride] = useState<{
+      readonly base: CookingFuel;
+      readonly alt: CookingFuel;
+    } | null>(null);
     const [addCorsiBox, setAddCorsiBox] = useState<boolean>(true);
+
+    const altCommute = resolveAlternative(
+      commuteOverride,
+      profile.commuteMode,
+      pickDefaultAltCommute,
+    );
+    const altFuel = resolveAlternative(fuelOverride, profile.cookingFuel, pickDefaultAltFuel);
+
+    const handleCommuteChange = (nextAlt: CommuteMode): void => {
+      setCommuteOverride({ base: profile.commuteMode, alt: nextAlt });
+    };
+
+    const handleFuelChange = (nextAlt: CookingFuel): void => {
+      setFuelOverride({ base: profile.cookingFuel, alt: nextAlt });
+    };
 
     const comparison = useMemo(() => {
       const nextHacks = addCorsiBox
@@ -173,8 +201,8 @@ export const WhatIfComparator: React.FC<WhatIfComparatorProps> = React.memo(
           altFuel={altFuel}
           addCorsiBox={addCorsiBox}
           isHi={isHi}
-          onCommute={setAltCommute}
-          onFuel={setAltFuel}
+          onCommute={handleCommuteChange}
+          onFuel={handleFuelChange}
           onCorsi={setAddCorsiBox}
         />
         <div aria-live="polite">

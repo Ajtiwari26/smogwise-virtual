@@ -31,6 +31,8 @@ export const SAMPLE_SCENARIOS: readonly SampleScenario[] = [
       commuteDistanceKm: 18,
       cookingFuel: 'lpg',
       activeHacks: ['window_sealing', 'wet_mopping', 'ventilation_window', 'n95_mask'],
+      rwaHouseholds: 120,
+      rwaAdoptionRate: 0.45,
     },
   },
   {
@@ -54,6 +56,8 @@ export const SAMPLE_SCENARIOS: readonly SampleScenario[] = [
         'ventilation_window',
         'corsi_rosenthal_box',
       ],
+      rwaHouseholds: 120,
+      rwaAdoptionRate: 0.45,
     },
   },
   {
@@ -92,6 +96,8 @@ export const SAMPLE_SCENARIOS: readonly SampleScenario[] = [
       commuteDistanceKm: 12,
       cookingFuel: 'biomass_chulha',
       activeHacks: ['wet_mopping', 'ventilation_window', 'n95_mask'],
+      rwaHouseholds: 120,
+      rwaAdoptionRate: 0.45,
     },
   },
   {
@@ -110,6 +116,8 @@ export const SAMPLE_SCENARIOS: readonly SampleScenario[] = [
       commuteDistanceKm: 24,
       cookingFuel: 'induction',
       activeHacks: ['window_sealing', 'ventilation_window', 'n95_mask', 'corsi_rosenthal_box'],
+      rwaHouseholds: 120,
+      rwaAdoptionRate: 0.45,
     },
   },
 ];

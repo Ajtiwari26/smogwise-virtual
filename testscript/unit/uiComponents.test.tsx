@@ -197,10 +197,21 @@ describe('WhatIfComparator', () => {
     expect(zeroDose).not.toBe(initialDose);
     expect(zeroDose).toContain('0 ug/day');
     rerender(
-      <WhatIfComparator profile={makeProfile({ language: 'hi' })} liveAq={undefined} />,
+      <WhatIfComparator
+        profile={makeProfile({
+          language: 'hi',
+          commuteMode: 'wfh_walk',
+          cookingFuel: 'induction',
+        })}
+        liveAq={undefined}
+      />,
     );
     expect(screen.getByText('क्या होगा यदि? (2-विकल्प तुलना)')).toBeInTheDocument();
     expect(screen.getByText('खुराक कमी')).toBeInTheDocument();
+    const hiCommuteSelect = container.querySelector('select#whatif-commute') as HTMLSelectElement;
+    const hiFuelSelect = container.querySelector('select#whatif-fuel') as HTMLSelectElement;
+    expect(hiCommuteSelect.value).toBe('metro_bus');
+    expect(hiFuelSelect.value).toBe('lpg');
   });
 });
 

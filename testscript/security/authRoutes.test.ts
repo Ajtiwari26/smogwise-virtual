@@ -209,4 +209,27 @@ describe('Brute-force rate limiting & public evaluator routes', () => {
       .send({ profile: SAMPLE_PROFILE, useLiveAq: false });
     expect(planRes.status).toBe(200);
   });
+
+  it('attaches sessionLimiter headers to session and preferences routes and rejects roomVolumeM3 < 12', async () => {
+    const app = createApp();
+    const sessionRes = await request(app).get('/api/auth/session');
+    expect(sessionRes.status).toBe(200);
+    expect(sessionRes.headers['ratelimit-policy']).toBe('120;w=900');
+
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'family.eval@smogwise.in', password: VALID_PASSWORD });
+    const cookie = extractCookiePair(loginRes.headers['set-cookie']);
+
+    const getPrefs = await request(app).get('/api/user/preferences').set('Cookie', cookie);
+    expect(getPrefs.status).toBe(200);
+    expect(getPrefs.headers['ratelimit-policy']).toBe('120;w=900');
+
+    const invalidRoom = await request(app)
+      .put('/api/user/preferences')
+      .set('Cookie', cookie)
+      .send({ profile: { ...SAMPLE_PROFILE, roomVolumeM3: 10 } });
+    expect(invalidRoom.status).toBe(400);
+    expect(invalidRoom.headers['ratelimit-policy']).toBe('120;w=900');
+  });
 });

@@ -23,6 +23,7 @@ export const RATE_LIMITS = {
   HEALTH: 60,
   GEO: 60,
   PLAN: 120,
+  SESSION: 120,
   AI_ASK: 40,
   BRIEFING: 40,
   AUTH: 20,
@@ -163,6 +164,7 @@ export function createRouteLimiters(): {
   readonly healthLimiter: RequestHandler;
   readonly geoLimiter: RequestHandler;
   readonly planLimiter: RequestHandler;
+  readonly sessionLimiter: RequestHandler;
   readonly aiAskLimiter: RequestHandler;
   readonly briefingLimiter: RequestHandler;
   readonly authLimiter: RequestHandler;
@@ -177,6 +179,10 @@ export function createRouteLimiters(): {
       'Too many location search requests. Please slow down.',
     ),
     planLimiter: makeLimiter(RATE_LIMITS.PLAN, 'Too many plan requests. Try again later.'),
+    sessionLimiter: makeLimiter(
+      RATE_LIMITS.SESSION,
+      'Too many session requests. Try again later.',
+    ),
     aiAskLimiter: makeLimiter(
       RATE_LIMITS.AI_ASK,
       'Too many assistant requests. Try again later.',
