@@ -3,6 +3,7 @@
  * Loads dotenv once and exposes typed runtime settings without leaking secrets.
  */
 
+import crypto from 'node:crypto';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -12,10 +13,13 @@ export interface EnvConfig {
   readonly allowedOrigin: string;
   readonly geminiApiKey: string;
   readonly nodeEnv: string;
+  readonly authSecret: string;
 }
 
 const DEFAULT_PORT = 3001;
 const DEFAULT_ALLOWED_ORIGIN = 'http://localhost:5173';
+const MIN_AUTH_SECRET_LENGTH = 16;
+const FALLBACK_AUTH_SECRET = crypto.randomBytes(32).toString('hex');
 
 function parsePort(raw: string | undefined): number {
   if (raw === undefined || raw.trim().length === 0) {
@@ -26,6 +30,14 @@ function parsePort(raw: string | undefined): number {
     return DEFAULT_PORT;
   }
   return parsed;
+}
+
+function resolveAuthSecret(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed !== undefined && trimmed.length >= MIN_AUTH_SECRET_LENGTH) {
+    return trimmed;
+  }
+  return FALLBACK_AUTH_SECRET;
 }
 
 /**
@@ -39,11 +51,13 @@ export function getEnvConfig(): EnvConfig {
   const allowedOrigin =
     rawOrigin !== undefined && rawOrigin.length > 0 ? rawOrigin : fallbackOrigin;
   const geminiApiKey = process.env['GEMINI_API_KEY']?.trim() ?? '';
+  const authSecret = resolveAuthSecret(process.env['AUTH_SECRET']);
 
   return {
     port,
     allowedOrigin,
     geminiApiKey,
     nodeEnv,
+    authSecret,
   };
 }

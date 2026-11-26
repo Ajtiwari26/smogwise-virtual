@@ -4,11 +4,17 @@ import {
   ApiError,
   fetchAqi,
   fetchAqiByCoords,
+  fetchSession,
+  fetchUserPreferences,
+  loginSession,
+  logoutSession,
   postAiAsk,
   postPlan,
   postPlanBriefing,
   postWhatIf,
+  saveUserPreferences,
   searchLocations,
+  type AuthUser,
 } from '../../src/services/apiClient.js';
 
 const sampleProfile: UserProfile = {
@@ -140,5 +146,50 @@ describe('apiClient error handling', () => {
     controller.abort();
 
     await expect(postAiAsk('Hello', sampleProfile, controller.signal)).rejects.toBe(abortErr);
+  });
+});
+
+describe('apiClient auth and user preference endpoints', () => {
+  const sampleUser: AuthUser = {
+    id: 'usr-1',
+    email: 'family.eval@smogwise.in',
+    name: 'Delhi Family',
+    personaId: 'young_family',
+    defaultLang: 'en',
+    defaultCityId: 'delhi_anand_vihar',
+  };
+
+  it('sends credentials: same-origin across auth and preference endpoints', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ user: sampleUser }))
+      .mockResolvedValueOnce(jsonResponse({ authenticated: true, user: sampleUser }))
+      .mockResolvedValueOnce(jsonResponse({ profile: sampleProfile }))
+      .mockResolvedValueOnce(jsonResponse({ profile: sampleProfile }))
+      .mockResolvedValueOnce(jsonResponse({ ok: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(loginSession(sampleUser.email, 'SmogWise#Eval2026')).resolves.toEqual({
+      user: sampleUser,
+    });
+    await expect(fetchSession()).resolves.toEqual({ authenticated: true, user: sampleUser });
+    await expect(fetchUserPreferences()).resolves.toEqual({ profile: sampleProfile });
+    await expect(saveUserPreferences(sampleProfile)).resolves.toEqual({ profile: sampleProfile });
+    await expect(logoutSession()).resolves.toEqual({ ok: true });
+
+    for (const call of fetchMock.mock.calls) {
+      expect(call[1]).toMatchObject({ credentials: 'same-origin' });
+    }
+  });
+
+  it('throws ApiError with status 401 on failed loginSession', async () => {
+    const errPayload = { error: 'INVALID_CREDENTIALS', message: 'Invalid credentials' };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(errPayload, 401)));
+
+    await expect(loginSession('bad@smogwise.in', 'wrong')).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 401,
+      code: 'INVALID_CREDENTIALS',
+    });
   });
 });

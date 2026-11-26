@@ -12,9 +12,20 @@ import type {
   LanguageCode,
   LiveAqOverride,
   LocationSearchItem,
+  PersonaType,
   UserProfile,
   WhatIfComparisonResult,
 } from '../domain/types.js';
+
+/** Authenticated user profile returned by session and login endpoints. */
+export interface AuthUser {
+  readonly id: string;
+  readonly email: string;
+  readonly name: string;
+  readonly personaId: PersonaType;
+  readonly defaultLang: LanguageCode;
+  readonly defaultCityId: string;
+}
 
 /** Typed HTTP error preserving status code and structured backend error code. */
 export class ApiError extends Error {
@@ -105,6 +116,72 @@ async function requestJson<T>(url: string, init: RequestInit): Promise<T> {
     throw await parseApiError(response);
   }
   return (await response.json()) as T;
+}
+
+async function requestAuthJson<T>(url: string, init: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...init,
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init.headers ?? {}),
+    },
+  });
+  if (!response.ok) {
+    throw await parseApiError(response);
+  }
+  return (await response.json()) as T;
+}
+
+/** Authenticates user credentials via POST /api/auth/login. */
+export async function loginSession(
+  email: string,
+  password: string,
+): Promise<{ readonly user: AuthUser }> {
+  return requestAuthJson<{ readonly user: AuthUser }>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+/** Checks active session cookie via GET /api/auth/session. */
+export async function fetchSession(
+  signal?: AbortSignal,
+): Promise<{ readonly authenticated: boolean; readonly user: AuthUser }> {
+  return requestAuthJson<{ readonly authenticated: boolean; readonly user: AuthUser }>(
+    '/api/auth/session',
+    {
+      method: 'GET',
+      ...(signal !== undefined ? { signal } : {}),
+    },
+  );
+}
+
+/** Terminates active session via POST /api/auth/logout. */
+export async function logoutSession(): Promise<{ readonly ok: boolean }> {
+  return requestAuthJson<{ readonly ok: boolean }>('/api/auth/logout', {
+    method: 'POST',
+  });
+}
+
+/** Fetches saved user profile preferences via GET /api/user/preferences. */
+export async function fetchUserPreferences(
+  signal?: AbortSignal,
+): Promise<{ readonly profile: UserProfile | null }> {
+  return requestAuthJson<{ readonly profile: UserProfile | null }>('/api/user/preferences', {
+    method: 'GET',
+    ...(signal !== undefined ? { signal } : {}),
+  });
+}
+
+/** Saves user profile preferences via PUT /api/user/preferences. */
+export async function saveUserPreferences(
+  profile: UserProfile,
+): Promise<{ readonly profile: UserProfile }> {
+  return requestAuthJson<{ readonly profile: UserProfile }>('/api/user/preferences', {
+    method: 'PUT',
+    body: JSON.stringify({ profile }),
+  });
 }
 
 /** Searches Indian cities and localities via GET /api/locations/search. */

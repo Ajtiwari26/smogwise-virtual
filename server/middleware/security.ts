@@ -25,6 +25,7 @@ export const RATE_LIMITS = {
   PLAN: 120,
   AI_ASK: 40,
   BRIEFING: 40,
+  AUTH: 20,
 } as const;
 
 const DEFAULT_DEV_ORIGINS: readonly string[] = [
@@ -131,7 +132,7 @@ export function createCorsMiddleware(): RequestHandler {
       callback(null, false);
     },
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Accept'],
+    allowedHeaders: ['Content-Type', 'Accept', 'Authorization'],
     credentials: false,
     optionsSuccessStatus: 204,
   };
@@ -164,6 +165,7 @@ export function createRouteLimiters(): {
   readonly planLimiter: RequestHandler;
   readonly aiAskLimiter: RequestHandler;
   readonly briefingLimiter: RequestHandler;
+  readonly authLimiter: RequestHandler;
 } {
   return {
     healthLimiter: makeLimiter(
@@ -182,6 +184,10 @@ export function createRouteLimiters(): {
     briefingLimiter: makeLimiter(
       RATE_LIMITS.BRIEFING,
       'Too many briefing requests. Try again later.',
+    ),
+    authLimiter: makeLimiter(
+      RATE_LIMITS.AUTH,
+      'Too many login attempts. Try again later.',
     ),
   };
 }

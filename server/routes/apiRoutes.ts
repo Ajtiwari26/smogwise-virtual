@@ -33,6 +33,7 @@ import {
   resolveProfileAq,
   toUserProfile,
 } from './apiRouteHelpers.js';
+import { createAuthRouter } from './authRoutes.js';
 
 const PLAN_CACHE_TTL_MS = 10 * 60 * 1000;
 const CITY_AQI_CACHE_CONTROL = 'public, s-maxage=300, stale-while-revalidate=600';
@@ -212,9 +213,16 @@ async function handleAiAsk(req: Request, res: Response, next: NextFunction): Pro
 /** Creates the Express API router with isolated per-route-group rate limiters. */
 export function createApiRouter(): Router {
   const router = express.Router();
-  const { healthLimiter, geoLimiter, planLimiter, aiAskLimiter, briefingLimiter } =
-    createRouteLimiters();
+  const {
+    healthLimiter,
+    geoLimiter,
+    planLimiter,
+    aiAskLimiter,
+    briefingLimiter,
+    authLimiter,
+  } = createRouteLimiters();
 
+  router.use(createAuthRouter(authLimiter));
   router.get('/health', healthLimiter, handleHealth);
   router.get('/locations/search', geoLimiter, (req, res, next) => {
     void handleLocationsSearch(req, res, next);

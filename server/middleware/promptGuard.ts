@@ -60,6 +60,14 @@ export const UserProfileSchema = z.object({
   customLocation: CustomLocationSchema.optional(),
 });
 
+/** Zod schema validating POST /api/auth/login payload. */
+export const LoginSchema = z
+  .object({
+    email: z.string().trim().email().max(120),
+    password: z.string().min(6).max(128),
+  })
+  .strict();
+
 /** Zod schema validating POST /api/what-if payload. */
 export const WhatIfSchema = z.object({
   baseline: UserProfileSchema,

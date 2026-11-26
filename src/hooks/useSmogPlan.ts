@@ -158,8 +158,11 @@ function useProfileActions(setters: ActionSetters): ProfileActions {
 }
 
 /** Provides instant Tier 1 deterministic planning with race-safe backend sync. */
-export function useSmogPlan(): UseSmogPlanResult {
-  const [profile, setProfile] = useState<UserProfile>(DEFAULT_PROFILE);
+export function useSmogPlan(initialOverrides?: Partial<UserProfile>): UseSmogPlanResult {
+  const [profile, setProfile] = useState<UserProfile>(() => ({
+    ...DEFAULT_PROFILE,
+    ...initialOverrides,
+  }));
   const [liveAq, setLiveAq] = useState<LiveAqOverride | undefined>(undefined);
   const [aqMeta, setAqMeta] = useState<AqMeta | undefined>(undefined);
   const [aqiError, setAqiError] = useState<string | undefined>(undefined);

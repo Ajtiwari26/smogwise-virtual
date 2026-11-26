@@ -89,12 +89,35 @@ SmogWise Virtual uses a **Two-Tier Hybrid Architecture** so every number is audi
 
 ---
 
+## Evaluator Test Credentials & Authentication
+
+SmogWise Virtual protects the personalized household & RWA workspace behind a server-verified authentication gateway (`LoginGate`) with 1-click evaluator sign-in and manual credential login:
+
+| Persona | Email | Public Sandbox Password | Default City & Language |
+| :--- | :--- | :--- | :--- |
+| **Delhi Family** (`young_family`) | `family.eval@smogwise.in` | `SmogWise#Eval2026` | Delhi (Anand Vihar) · English (`en`) |
+| **Lucknow Senior** (`sensitive_household`) | `senior.eval@smogwise.in` | `SmogWise#Eval2026` | Lucknow (Gomti Nagar) · हिन्दी (`hi`) |
+| **Gurugram RWA** (`rwa_coordinator`) | `rwa.eval@smogwise.in` | `SmogWise#Eval2026` | Gurugram (DLF) · English (`en`) |
+| **Office Commuter** (`office_commuter`) | `commuter.eval@smogwise.in` | `SmogWise#Eval2026` | Delhi Commuter · English (`en`) |
+| **Outdoor Student** (`outdoor_student`) | `student.eval@smogwise.in` | `SmogWise#Eval2026` | Kanpur Student · English (`en`) |
+
+- **Cryptographic Password & Session Security:** Passwords are verified on the server using salted `crypto.scryptSync` and constant-time `crypto.timingSafeEqual`. Successful authentication issues a 24-hour `HMAC-SHA256` signed `HttpOnly`, `SameSite=Lax` (`Secure` in production) session cookie signed with `AUTH_SECRET` (from environment or a per-process CSPRNG fallback when unset).
+- **Dedicated Brute-Force Protection & Zero Bypasses:** Auth routes are guarded by a dedicated `authLimiter` (`20 req / 15 min` per IP) in addition to global API rate limiting, and the client enforces strictly server-verified sessions with zero offline/catch login bypasses.
+- **Auth & Preference Endpoints:**
+  - `POST /api/auth/login` — verifies email/password via `scryptSync` + `timingSafeEqual` and sets the `HttpOnly` session cookie.
+  - `POST /api/auth/logout` — clears the active session cookie.
+  - `GET /api/auth/session` — validates the `HMAC-SHA256` session cookie and returns the authenticated user profile.
+  - `GET /api/user/preferences` & `PUT /api/user/preferences` — reads and persists per-user profile settings scoped strictly to the authenticated user ID.
+
+---
+
 ## Setup, Environment & Verification
 
 ```bash
 npm install
 cp .env.example .env
-# Optional: set GEMINI_API_KEY in .env for live Tier 2 Gemini 4 responses
+# Optional: set GEMINI_API_KEY= in .env for live Tier 2 Gemini 4 responses
+# Optional: set AUTH_SECRET= in .env to persist HMAC-SHA256 session cookies across server restarts
 ```
 
 ### Run Locally

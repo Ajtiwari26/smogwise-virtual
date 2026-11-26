@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../src/App.js';
 
@@ -65,5 +65,58 @@ describe('App WCAG 2.1 AA landmarks, labels & bilingual semantics', () => {
     render(<App />);
     const text = document.body.textContent ?? '';
     expect(text).toMatch(/Good|Satisfactory|Moderate|Poor|Very Poor|Severe/i);
+  });
+});
+
+describe('App authenticated session lifecycle & landmarks', () => {
+  it('logs in via 1-Click Evaluator Access, renders authenticated dashboard landmarks, and signs out cleanly', async () => {
+    const evalUser = {
+      id: 'eval-family',
+      email: 'family.eval@smogwise.in',
+      name: 'Delhi Family',
+      personaId: 'young_family',
+      defaultLang: 'en',
+      defaultCityId: 'delhi_anand_vihar',
+    };
+    const jsonRes = (body: unknown, status = 200): Response =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      });
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('/api/auth/session')) {
+        return Promise.resolve(jsonRes({ error: 'UNAUTHENTICATED' }, 401));
+      }
+      if (url.includes('/api/auth/login')) {
+        return Promise.resolve(jsonRes({ user: evalUser }));
+      }
+      if (url.includes('/api/user/preferences')) {
+        return Promise.resolve(jsonRes({ profile: null }));
+      }
+      if (url.includes('/api/auth/logout')) {
+        return Promise.resolve(jsonRes({ ok: true }));
+      }
+      return Promise.resolve(jsonRes({ error: 'offline test mock' }, 503));
+    });
+
+    const { container } = render(<App />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Delhi Family/i })).not.toBeDisabled();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Delhi Family/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Sign Out/i })).not.toBeNull();
+    });
+    expect(container.querySelector('#impact')).not.toBeNull();
+    expect(document.body.textContent ?? '').toContain('Direct Health & Emissions Impact');
+
+    fireEvent.click(screen.getByRole('button', { name: /Sign Out/i }));
+    await waitFor(() => {
+      expect(container.querySelector('#gateway-login')).not.toBeNull();
+    });
+    expect(container.querySelector('#impact')).toBeNull();
   });
 });

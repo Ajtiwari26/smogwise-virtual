@@ -1,15 +1,24 @@
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { AiPlanBriefingCard } from './components/AiPlanBriefingCard.js';
 import { DailyRoutineTimeline } from './components/DailyRoutineTimeline.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { GroundedAssistant } from './components/GroundedAssistant.js';
 import { Header } from './components/Header.js';
 import { ImpactDashboard } from './components/ImpactDashboard.js';
+import { LoginGate } from './components/LoginGate.js';
 import { PersonaForm } from './components/PersonaForm.js';
 import { RWACommunityPanel } from './components/RWACommunityPanel.js';
 import { SmogAlertBanner, type SmogAlertBannerProps } from './components/SmogAlertBanner.js';
 import { WhatIfComparator } from './components/WhatIfComparator.js';
+import type { LanguageCode, UserProfile } from './domain/types.js';
 import { useSmogPlan, type UseSmogPlanResult } from './hooks/useSmogPlan.js';
+import {
+  fetchSession,
+  fetchUserPreferences,
+  logoutSession,
+  saveUserPreferences,
+  type AuthUser,
+} from './services/apiClient.js';
 
 function pickBannerField<K extends keyof SmogAlertBannerProps>(
   key: K,
@@ -103,12 +112,62 @@ function AppMainColumns({ state }: { readonly state: UseSmogPlanResult }): React
   );
 }
 
-/** Root SmogWise Virtual application layout with WCAG 2.1 AA landmarks. */
-export const App: React.FC = function App() {
-  const state = useSmogPlan();
-  const { profile, plan, aqMeta, isSyncing, setLanguage, selectPresetCity } = state;
+function usePreferenceSync(
+  profile: UserProfile,
+  applySampleScenario: (scenarioProfile: UserProfile) => void,
+): void {
+  const [hasHydrated, setHasHydrated] = useState<boolean>(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const res = await fetchUserPreferences(controller.signal);
+        if (!controller.signal.aborted && res.profile !== null) {
+          applySampleScenario(res.profile);
+        }
+      } catch {
+        // Ignore preference fetch failures cleanly
+      } finally {
+        if (!controller.signal.aborted) {
+          setHasHydrated(true);
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [applySampleScenario]);
+
+  useEffect(() => {
+    if (!hasHydrated) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      void saveUserPreferences(profile).catch(() => undefined);
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [hasHydrated, profile]);
+}
+
+interface AuthenticatedWorkspaceProps {
+  readonly authUser: AuthUser;
+  readonly onSignOut: () => void;
+}
+
+const AuthenticatedWorkspace: React.FC<AuthenticatedWorkspaceProps> = function Workspace({
+  authUser,
+  onSignOut,
+}) {
+  const state = useSmogPlan({
+    persona: authUser.personaId,
+    language: authUser.defaultLang,
+    cityId: authUser.defaultCityId,
+  });
+  const { profile, plan, aqMeta, isSyncing, setLanguage, selectPresetCity, applySampleScenario } =
+    state;
   const { report } = plan;
   const isHi = profile.language === 'hi';
+
+  usePreferenceSync(profile, applySampleScenario);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -119,6 +178,9 @@ export const App: React.FC = function App() {
         isSyncing={isSyncing}
         onCityChange={selectPresetCity}
         onLanguageChange={setLanguage}
+        isAuthenticated={true}
+        authUser={authUser}
+        onSignOut={onSignOut}
       />
 
       <main id="main-content" className="mx-auto max-w-7xl space-y-4 px-4 py-5">
@@ -135,6 +197,61 @@ export const App: React.FC = function App() {
       </footer>
     </div>
   );
+};
+
+/** Root SmogWise Virtual application layout with authentication gate and WCAG 2.1 AA landmarks. */
+export const App: React.FC = function App() {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [isCheckingSession, setIsCheckingSession] = useState<boolean>(true);
+  const [gateLanguage, setGateLanguage] = useState<LanguageCode>('en');
+
+  useEffect(() => {
+    if (authUser === null) {
+      document.documentElement.lang = gateLanguage;
+    }
+  }, [authUser, gateLanguage]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const res = await fetchSession(controller.signal);
+        if (!controller.signal.aborted && res.authenticated) {
+          setAuthUser(res.user);
+        }
+      } catch {
+        if (!controller.signal.aborted) {
+          setAuthUser(null);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsCheckingSession(false);
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, []);
+
+  const handleSignOut = useCallback((): void => {
+    void logoutSession()
+      .catch(() => undefined)
+      .finally(() => {
+        setAuthUser(null);
+      });
+  }, []);
+
+  if (authUser === null) {
+    return (
+      <LoginGate
+        language={gateLanguage}
+        isCheckingSession={isCheckingSession}
+        onLanguageChange={setGateLanguage}
+        onLoginSuccess={setAuthUser}
+      />
+    );
+  }
+
+  return <AuthenticatedWorkspace authUser={authUser} onSignOut={handleSignOut} />;
 };
 
 export default App;

@@ -26,6 +26,7 @@ const BASE_ENV: EnvConfig = {
   allowedOrigin: 'http://localhost:5173',
   geminiApiKey: 'mock-unit-test-key',
   nodeEnv: 'test',
+  authSecret: 'unit-test-secret-0123456789abcdef',
 };
 
 function makeProfile(overrides: Partial<UserProfile> = {}): UserProfile {

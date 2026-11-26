@@ -25,11 +25,11 @@
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        React 19 + Tailwind CSS UI                       │
-│  (WCAG 2.1 AA · Hindi/English Toggle · Preset Profiles · Live Sliders)  │
+│  LoginGate (scrypt/HMAC Session) ──▶ Authenticated Workspace (WCAG AA)  │
 └───────────────────────────────┬─────────────────────────────────────────┘
                                 │
         ┌───────────────────────┴───────────────────────┐
-        ▼ (Client-side instant recalculation)           ▼ (POST /api/plan, /api/plan/briefing, /api/what-if, /api/ai/ask)
+        ▼ (Client-side instant recalculation)           ▼ (/api/auth/*, /api/user/preferences, /api/plan, /api/plan/briefing, /api/what-if, /api/ai/ask, /api/aqi)
 ┌───────────────────────────────────┐   ┌─────────────────────────────────┐
 │  Tier 1: Deterministic Engine     │   │  Express 5 + Helmet + Zod API   │
 │  (src/domain/* — pure TS)         │   │  (server/ & api/index.ts)       │
@@ -80,10 +80,11 @@ All domain modules are pure TypeScript functions with zero React, DOM, Node, or 
 - **HTTP Headers & CORS:** `helmet` (`^8.1.0`) sets strict CSP, `X-Content-Type-Options: nosniff`, `Permissions-Policy: geolocation=(self)`, `Referrer-Policy: no-referrer`, COOP/CORP headers, and frame protections; `cors` restricts origins to `ALLOWED_ORIGIN`.
 - **Payload & Prototype-Pollution Guard (`bodyGuard`):** Enforces a 16 KB JSON body limit alongside own-property prototype-pollution checks (`__proto__`, `constructor`, `prototype`) and a maximum nesting depth of 8.
 - **Caching & Upstream Coalescing:** Applies a `Cache-Control` split (`public, s-maxage=300, stale-while-revalidate=600` for preset city AQ vs `private, no-store` for coordinate queries, plans, briefings, and Q&A) and bounded singleflight deduplication (`MAX_INFLIGHT = 100`) to prevent upstream stampedes.
-- **Rate Limiting:** Isolated route-group rate limiting caps `/api/*` requests (`60 req / 15 min` per IP) to prevent abuse and protect free-tier quotas (note: on Vercel serverless deployments, in-memory rate-limit counters are per-instance and reset across cold starts).
+- **Authentication Gateway & Session Security (`LoginGate`):** Unauthenticated visitors land on `LoginGate` (`POST /api/auth/login`, `GET /api/auth/session`, `POST /api/auth/logout`) with zero client-side offline login bypasses. Credentials are verified server-side using salted `crypto.scryptSync` and constant-time `crypto.timingSafeEqual`, issuing 24-hour `HMAC-SHA256` signed `HttpOnly`, `SameSite=Lax` (`Secure` in production) cookies signed with `AUTH_SECRET` (env or CSPRNG fallback).
+- **User-Scoped Preference Isolation:** `GET /api/user/preferences` and `PUT /api/user/preferences` require a valid `HMAC-SHA256` session cookie and isolate saved `UserProfile` configurations inside a bounded server-side LRU store keyed strictly by authenticated `user.id`.
+- **Rate Limiting:** Dedicated `authLimiter` (`20 req / 15 min` per IP) protects `/api/auth/*` against credential brute-forcing, while isolated route-group rate limiting caps `/api/*` endpoints (`/api/aqi`, `/api/plan`, `/api/what-if`, `/api/ai/ask`) at `60 req / 15 min` per IP (note: on Vercel serverless deployments, in-memory rate-limit counters are per-instance and reset across cold starts).
 - **Strict Input Validation & Dependency Hygiene:** All incoming payloads are validated with `zod` (`^4.6.7`) returning sanitized errors before reaching domain or AI handlers, paired with 0-CVE npm dependencies.
-- **Zero Secret Exposure:** API keys live strictly in server environment variables (`.env`), never bundled into `VITE_*` client assets.
-- **Zero PII Storage:** Stateless architecture with no database or user tracking.
+- **Zero Secret Exposure:** `GEMINI_API_KEY` and `AUTH_SECRET` live strictly in server environment variables (`.env`), never bundled into `VITE_*` client assets.
 
 ### Accessibility & Quality Gates (WCAG 2.1 AA)
 - Semantic landmarks (`<header>`, `<main>`, `<nav>`, `<section>`, `<footer>`), skip-to-content link, and a bilingual `ErrorBoundary` fallback.
