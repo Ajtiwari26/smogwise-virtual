@@ -82,8 +82,8 @@ export const AiAskSchema = z
     city: z
       .string()
       .trim()
-      .min(1)
-      .max(80)
+      .min(2)
+      .max(64)
       .refine((val) => !isUnsafeCityInput(val), 'Unsafe city identifier')
       .optional(),
     language: z.enum(LANGUAGES).optional(),

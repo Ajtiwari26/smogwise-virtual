@@ -41,8 +41,8 @@
                                         │ Tier 2 AI │       │ Offline   │
                                         │ @google/  │──────▶│ Grounded  │
                                         │ genai     │(fall- │ Fallback  │
-                                        │ gemini-4- │ back) │ Engine    │
-                                        │ hydrogen  │       └───────────┘
+                                        │ 3.5-lite  │ back) │ Engine    │
+                                        │ -> 4-hydr │       └───────────┘
                                         └───────────┘
 ```
 

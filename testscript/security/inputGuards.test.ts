@@ -109,12 +109,14 @@ describe('Unsafe city identifiers and prompt guard boundaries', () => {
     }
   });
 
-  it('rejects unsafe city string on POST /api/ai/ask with HTTP 400', async () => {
-    const res = await request(app)
-      .post('/api/ai/ask')
-      .send({ question: 'How can I reduce indoor PM2.5?', city: 'http://localhost:3000/secret' });
+  it('rejects unsafe or oversized city string on POST /api/ai/ask with HTTP 400', async () => {
+    for (const badCity of ['http://localhost:3000/secret', 'a'.repeat(65)]) {
+      const res = await request(app)
+        .post('/api/ai/ask')
+        .send({ question: 'How can I reduce indoor PM2.5?', city: badCity });
 
-    expect(res.status).toBe(400);
+      expect(res.status).toBe(400);
+    }
   });
 
   it('allows legitimate pediatric asthma question while blocking override prompts', () => {
