@@ -264,6 +264,23 @@ describe('useSmogPlan RWA and briefing hydration', () => {
     expect(result.current.isBriefingLoading).toBe(false);
     expect(result.current.briefing).toEqual(mockBriefingResponse);
   });
+
+  it('preserves hydrated briefing when RWA controls update', async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useSmogPlan());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS);
+    });
+    expect(result.current.briefing).toEqual(mockBriefingResponse);
+
+    act(() => {
+      result.current.updateRwaHouseholds(250);
+      result.current.updateRwaAdoptionRate(0.75);
+    });
+
+    expect(result.current.briefing).toEqual(mockBriefingResponse);
+  });
 });
 
 describe('useSmogPlan error states', () => {

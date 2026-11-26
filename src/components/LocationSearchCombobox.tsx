@@ -94,7 +94,7 @@ function ComboboxInputField({
     searchState.isOpen && activeOption !== undefined ? `${listboxId}-${activeOption.id}` : undefined;
   const inputCls =
     'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm ' +
-    'text-slate-900 placeholder-slate-500 focus:border-emerald-700 focus:outline-none';
+    'text-slate-900 placeholder-slate-600 focus:border-emerald-700 focus:outline-none';
 
   return (
     <div className="relative">

@@ -13,7 +13,7 @@ export interface SampleScenario {
   readonly profile: UserProfile;
 }
 
-/** Four curated Indian winter smog scenarios mapped to verified city preset IDs. */
+/** Five curated Indian winter smog scenarios mapped to verified city preset IDs. */
 export const SAMPLE_SCENARIOS: readonly SampleScenario[] = [
   {
     id: 'delhi_young_family',
@@ -92,6 +92,24 @@ export const SAMPLE_SCENARIOS: readonly SampleScenario[] = [
       commuteDistanceKm: 12,
       cookingFuel: 'biomass_chulha',
       activeHacks: ['wet_mopping', 'ventilation_window', 'n95_mask'],
+    },
+  },
+  {
+    id: 'delhi_office_commuter',
+    labelEn: 'Delhi Office Commuter (Anand Vihar)',
+    labelHi: 'दिल्ली ऑफिस यात्री (आनंद विहार)',
+    profile: {
+      persona: 'office_commuter',
+      cityId: 'delhi_anand_vihar',
+      language: 'en',
+      householdSize: 2,
+      hasVulnerableMember: false,
+      monthlyBudgetInr: 3000,
+      roomVolumeM3: 80,
+      commuteMode: 'two_wheeler',
+      commuteDistanceKm: 24,
+      cookingFuel: 'induction',
+      activeHacks: ['window_sealing', 'ventilation_window', 'n95_mask', 'corsi_rosenthal_box'],
     },
   },
 ];

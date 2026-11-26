@@ -5,7 +5,7 @@
  */
 
 import { z } from 'zod';
-import { CITY_PRESETS } from '../../src/domain/cityPresets.js';
+import { CITY_PRESETS, isWithinIndiaCoords } from '../../src/domain/cityPresets.js';
 import type { LocationSearchItem } from '../../src/domain/types.js';
 import { createLruCache, createSingleflight, hashCacheKey } from '../cache/lruCache.js';
 import { sanitizeLocationText } from '../middleware/locationGuard.js';
@@ -13,10 +13,6 @@ import { sanitizeLocationText } from '../middleware/locationGuard.js';
 const OPEN_METEO_GEO_ENDPOINT = 'https://geocoding-api.open-meteo.com/v1/search';
 const FETCH_TIMEOUT_MS = 3500;
 const GEO_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const INDIA_LAT_MIN = 6.5;
-const INDIA_LAT_MAX = 37.5;
-const INDIA_LON_MIN = 68.0;
-const INDIA_LON_MAX = 97.5;
 
 const GeocodingRawItemSchema = z.object({
   name: z.string().min(1),
@@ -37,14 +33,7 @@ function normalizeQueryKey(rawQuery: string): string {
   return rawQuery.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function isInsideIndia(lat: number, lon: number): boolean {
-  return (
-    lat >= INDIA_LAT_MIN &&
-    lat <= INDIA_LAT_MAX &&
-    lon >= INDIA_LON_MIN &&
-    lon <= INDIA_LON_MAX
-  );
-}
+
 
 function roundTwoDecimals(value: number): number {
   return Math.round(value * 100) / 100;
@@ -65,7 +54,7 @@ function mapRawResult(raw: z.infer<typeof GeocodingRawItemSchema>): LocationSear
   if (raw.country_code !== undefined && raw.country_code.toUpperCase() !== 'IN') {
     return null;
   }
-  if (!isInsideIndia(raw.latitude, raw.longitude)) {
+  if (!isWithinIndiaCoords(raw.latitude, raw.longitude)) {
     return null;
   }
   const name = sanitizeLocationText(raw.name);

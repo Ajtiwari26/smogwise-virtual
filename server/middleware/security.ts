@@ -86,6 +86,7 @@ export function createHelmetMiddleware(): RequestHandler {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
         styleSrc: isProd ? ["'self'"] : ["'self'", "'unsafe-inline'"],
+        fontSrc: ["'self'", 'data:'],
         imgSrc: ["'self'", 'data:'],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],

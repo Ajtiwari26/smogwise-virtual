@@ -137,15 +137,13 @@ function useProfileActions(setters: ActionSetters): ProfileActions {
 
   const updateRwaHouseholds = useCallback((rwaHouseholds: number) => {
     setSyncedPlan(undefined);
-    setBriefing(undefined);
     setProfile((prev) => ({ ...prev, rwaHouseholds }));
-  }, [setSyncedPlan, setBriefing, setProfile]);
+  }, [setSyncedPlan, setProfile]);
 
   const updateRwaAdoptionRate = useCallback((rwaAdoptionRate: number) => {
     setSyncedPlan(undefined);
-    setBriefing(undefined);
     setProfile((prev) => ({ ...prev, rwaAdoptionRate }));
-  }, [setSyncedPlan, setBriefing, setProfile]);
+  }, [setSyncedPlan, setProfile]);
 
   return {
     updateProfile,

@@ -48,7 +48,7 @@ function BriefingHeader(props: {
   const { isHindi, isLoading, isGemini } = props;
   const modeLabel = isGemini
     ? (isHindi ? 'Gemini 4 ग्राउंडेड' : 'Gemini 4 Grounded')
-    : (isHindi ? 'नियतात्मक फ़ॉलबैक' : 'Deterministic Fallback');
+    : (isHindi ? 'टियर-1 सत्यापित सारांश' : 'Tier-1 Grounded Summary');
   const badgeTone = isGemini ? 'bg-teal-50 text-teal-800' : 'bg-slate-100 text-slate-800';
 
   return (
@@ -110,6 +110,7 @@ export function AiPlanBriefingCard({
   return (
     <section
       aria-labelledby="ai-briefing-heading"
+      aria-busy={isLoading}
       className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
     >
       <BriefingHeader

@@ -7,7 +7,12 @@
 export type LanguageCode = 'en' | 'hi';
 
 /** Target user persona archetypes. */
-export type PersonaType = 'young_family' | 'sensitive_household' | 'rwa_coordinator';
+export type PersonaType =
+  | 'young_family'
+  | 'sensitive_household'
+  | 'rwa_coordinator'
+  | 'office_commuter'
+  | 'outdoor_student';
 
 /** Daily commute mode options. */
 export type CommuteMode =
@@ -140,6 +145,8 @@ export interface DeterministicReport {
   readonly cpcbAqi: number;
   readonly aqiBand: AqiBandId;
   readonly dominantPollutant: DominantPollutant;
+  readonly livePm10?: number;
+  readonly liveNo2?: number;
   readonly observedAt?: string;
   readonly fallbackStationName?: string;
   readonly fallbackDistanceKm?: number;

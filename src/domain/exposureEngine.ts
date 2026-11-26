@@ -29,6 +29,8 @@ import {
 import type { ExposureMetrics, HourlyExposurePoint, IAQHackId, UserProfile } from './types.js';
 
 const MAX_AMBIENT_PM25 = 1500;
+const OFFICE_COMMUTE_HOURS: readonly number[] = [8, 9, 18, 19];
+const STUDENT_OUTDOOR_HOURS: readonly number[] = [7, 8, 15, 16];
 
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -127,13 +129,40 @@ export function computeIndoorSeries(
   });
 }
 
+function isPersonaOutdoorHour(profile: UserProfile, hour: number): boolean {
+  if (profile.persona === 'outdoor_student') {
+    return STUDENT_OUTDOOR_HOURS.includes(hour);
+  }
+  const commutesOutdoors = profile.commuteMode !== 'wfh_walk' && profile.commuteDistanceKm > 0;
+  if (!commutesOutdoors) {
+    return false;
+  }
+  if (profile.persona === 'office_commuter') {
+    return OFFICE_COMMUTE_HOURS.includes(hour);
+  }
+  return COMMUTE_HOURS.includes(hour);
+}
+
+function computePersonaInhalationRate(
+  profile: UserProfile,
+  hour: number,
+  isOutdoor: boolean,
+): number {
+  const baseRate = computeHourlyInhalationRate(hour, isOutdoor, profile.hasVulnerableMember);
+  const isCommutingStudent =
+    profile.persona === 'outdoor_student' &&
+    isOutdoor &&
+    profile.commuteMode !== 'wfh_walk' &&
+    profile.commuteDistanceKm > 0;
+  return isCommutingStudent ? baseRate * 1.1 : baseRate;
+}
+
 function buildHourlyPoints(
   profile: UserProfile,
   outdoorSeries: readonly number[],
   baselineIndoor: readonly number[],
   optimizedIndoor: readonly number[],
 ): readonly HourlyExposurePoint[] {
-  const commutesOutdoors = profile.commuteMode !== 'wfh_walk' && profile.commuteDistanceKm > 0;
   const maskFactor = hasHack(profile.activeHacks, 'n95_mask')
     ? 1 - N95_FILTRATION_EFFICIENCY
     : 1;
@@ -141,10 +170,10 @@ function buildHourlyPoints(
   return outdoorSeries.map((cOut, hour) => {
     const baseIn = baselineIndoor[hour] ?? cOut;
     const optIn = optimizedIndoor[hour] ?? cOut;
-    const isCommute = commutesOutdoors && COMMUTE_HOURS.includes(hour);
-    const ir = computeHourlyInhalationRate(hour, isCommute, profile.hasVulnerableMember);
-    const baseDose = round2((isCommute ? cOut : baseIn) * ir);
-    const optDose = round2((isCommute ? cOut * maskFactor : optIn) * ir);
+    const isOutdoor = isPersonaOutdoorHour(profile, hour);
+    const ir = computePersonaInhalationRate(profile, hour, isOutdoor);
+    const baseDose = round2((isOutdoor ? cOut : baseIn) * ir);
+    const optDose = round2((isOutdoor ? cOut * maskFactor : optIn) * ir);
     return {
       hour,
       label: formatHourLabel(hour),

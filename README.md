@@ -49,6 +49,7 @@ SmogWise Virtual uses a **Two-Tier Hybrid Architecture** so every number is audi
 | `lucknow_senior_hindi` | Lucknow Senior Citizen Home (3 members, vulnerable senior, ₹1,800/mo, `induction`) | Lucknow (Gomti Nagar) | हिन्दी (`hi`) | Low-cost hacks + DIY Corsi-Rosenthal Box ranking + Devanagari localized advice |
 | `gurugram_rwa_180` | Gurugram RWA Coordinator (180 flats, 65% adoption, ₹4,500/mo) | Gurugram (DLF Phase 3) | English (`en`) | Linear RWA community $\text{CO}_2\text{e}$ & $\text{PM}_{2.5}$ scaling + copyable RWA notice |
 | `patna_clean_cooking` | Patna Chulha Transition (5 members, ₹900/mo, `biomass_chulha`) | Patna (Boring Road) | English (`en`) | Clean-cooking transition impact + budget-first low-cost hacks |
+| `delhi_office_commuter` | Delhi Office Commuter (`office_commuter` persona contrasting `delhi_young_family`) | Delhi (Anand Vihar) | English (`en`) | High-exposure daily commute dose reduction, N95 mask impact, and transit mode deltas |
 
 ---
 
@@ -74,7 +75,7 @@ SmogWise Virtual uses a **Two-Tier Hybrid Architecture** so every number is audi
   - `POST /api/plan/briefing` — `AiPlanBriefingCard` debounced Gemini 4 headline, summary, and grounded actions with bounded LRU caching and deterministic bilingual fallback.
   - `POST /api/what-if` — side-by-side comparison of two household choices with quantitative deltas.
   - `POST /api/ai/ask` — grounded bilingual Q&A with prompt-injection sanitization, XML delimiters, and output leak checks.
-- **Security & Accessibility:** Helmet CSP/`nosniff`/`X-Frame-Options`, `Permissions-Policy: geolocation=(self)`, `Referrer-Policy: no-referrer`, COOP/CORP headers, strict CORS, `bodyGuard` own-property prototype-pollution and nesting depth-8 guard, 16 KB JSON body limit, `Cache-Control` `public, max-age=300` vs `private, no-store` split, bounded singleflight deduplication, isolated route-group rate limiting (with Vercel serverless per-instance ephemeral cold-start caveat), sanitized Zod validation (no stack traces), 0-CVE npm dependencies, `>=85%` stmts/funcs/lines and `>=75%` branches coverage gates, `ErrorBoundary`, `sr-only` `ImpactDashboard` chart table, WCAG 2.1 AA contrast, semantic landmarks, skip link, `aria-live` alerts, keyboard navigation, and non-color-only CPCB AQI labels.
+- **Security & Accessibility:** Helmet CSP (including `font-src 'self' data:`)/`nosniff`/`X-Frame-Options`, `Permissions-Policy: geolocation=(self)`, `Referrer-Policy: no-referrer`, COOP/CORP headers, strict CORS, `bodyGuard` own-property prototype-pollution and nesting depth-8 guard, 16 KB JSON body limit, `Cache-Control` `public, s-maxage=300, stale-while-revalidate=600` vs `private, no-store` split, bounded singleflight deduplication, isolated route-group rate limiting (with Vercel serverless per-instance ephemeral cold-start caveat), sanitized Zod validation (no stack traces), 0-CVE npm dependencies, `>=85%` stmts/funcs/lines and `>=75%` branches coverage gates, `ErrorBoundary`, `sr-only` `ImpactDashboard` chart table, WCAG 2.1 AA contrast, semantic landmarks, skip link, `aria-live` alerts, keyboard navigation, and non-color-only CPCB AQI labels.
 
 ---
 

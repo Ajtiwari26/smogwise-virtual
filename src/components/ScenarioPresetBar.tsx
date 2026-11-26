@@ -14,7 +14,7 @@ export interface ScenarioPresetBarProps {
 }
 
 /**
- * Renders 4 high-contrast accessible scenario chips from SAMPLE_SCENARIOS.
+ * Renders curated Indian smog presets from SAMPLE_SCENARIOS.
  */
 export function ScenarioPresetBar({
   language,
@@ -24,7 +24,7 @@ export function ScenarioPresetBar({
   const isHindi = language === 'hi';
 
   return (
-    <section aria-label={isHindi ? 'त्वरित परिदृश्य नमूने' : 'Quick Sample Scenarios'}>
+    <div role="group" aria-label={isHindi ? 'त्वरित परिदृश्य नमूने' : 'Quick Sample Scenarios'}>
       <p className="mb-1.5 text-xs font-semibold text-slate-800">
         {isHindi ? 'त्वरित परिदृश्य चुनें:' : 'Try a Sample Household Scenario:'}
       </p>
@@ -50,6 +50,6 @@ export function ScenarioPresetBar({
           );
         })}
       </div>
-    </section>
+    </div>
   );
 }

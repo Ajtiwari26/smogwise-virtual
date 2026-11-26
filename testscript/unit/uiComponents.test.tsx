@@ -3,8 +3,10 @@ import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AiPlanBriefingCard } from '../../src/components/AiPlanBriefingCard.js';
 import { ErrorBoundary } from '../../src/components/ErrorBoundary.js';
 import { GroundedAssistant } from '../../src/components/GroundedAssistant.js';
+import { Header } from '../../src/components/Header.js';
 import { PersonaForm } from '../../src/components/PersonaForm.js';
 import { RWACommunityPanel } from '../../src/components/RWACommunityPanel.js';
 import { ScenarioPresetBar } from '../../src/components/ScenarioPresetBar.js';
@@ -311,6 +313,34 @@ describe('SmogAlertBanner', () => {
   });
 });
 
+describe('SmogAlertBanner live pollutant provenance', () => {
+  it('renders live PM10 and NO2 provenance only when provided', () => {
+    const { rerender } = render(
+      <SmogAlertBanner
+        city={BASE_CITY}
+        language="en"
+        optimalVentilationWindow="14:00–16:00 IST"
+        dataSource="live_open_meteo"
+      />,
+    );
+    const banner = screen.getByRole('alert');
+    expect(banner).not.toHaveTextContent('PM10:');
+    expect(banner).not.toHaveTextContent('NO2:');
+    rerender(
+      <SmogAlertBanner
+        city={BASE_CITY}
+        language="en"
+        optimalVentilationWindow="14:00–16:00 IST"
+        dataSource="live_open_meteo"
+        livePm10={180}
+        liveNo2={45}
+      />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('PM10: 180 ug/m3');
+    expect(screen.getByRole('alert')).toHaveTextContent('NO2: 45 ug/m3');
+  });
+});
+
 describe('PersonaForm', () => {
   it('clamps numeric fields and dispatches select, checkbox, and hack toggles', () => {
     const onUpdate = vi.fn();
@@ -347,6 +377,50 @@ describe('PersonaForm', () => {
     expect(onUpdate).toHaveBeenCalledWith({ cityId: 'gurugram_dlf' });
     expect(onUpdate).toHaveBeenCalledWith({ hasVulnerableMember: false });
     expect(onToggleHack).toHaveBeenCalledWith('corsi_rosenthal_box');
+    const personaSelect = screen.getByLabelText('Household Persona');
+    expect(personaSelect.querySelector('option[value="office_commuter"]')).not.toBeNull();
+    expect(personaSelect.querySelector('option[value="outdoor_student"]')).not.toBeNull();
+  });
+});
+
+describe('Header and AiPlanBriefingCard', () => {
+  it('Header custom city sync', () => {
+    const onCityChange = vi.fn();
+    const customCity: CityPreset = {
+      ...BASE_CITY,
+      id: 'custom_indore',
+      name: 'Indore, Madhya Pradesh',
+      nameHi: 'Indore, Madhya Pradesh',
+    };
+    render(
+      <Header
+        city={customCity}
+        language="en"
+        dataSource="live_open_meteo"
+        isSyncing={false}
+        onCityChange={onCityChange}
+        onLanguageChange={vi.fn()}
+      />,
+    );
+    const select = document.getElementById('header-city-select') as HTMLSelectElement;
+    expect(select.value).toBe('custom_indore');
+    expect(screen.getByRole('option', { name: 'Indore, Madhya Pradesh' })).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: 'delhi_anand_vihar' } });
+    expect(onCityChange).toHaveBeenCalledWith('delhi_anand_vihar');
+  });
+
+  it('renders Tier-1 Grounded Summary and aria-busy when loading', () => {
+    const { report } = computeFullPlan(makeProfile());
+    const { container } = render(
+      <AiPlanBriefingCard
+        report={report}
+        briefing={undefined}
+        isLoading={true}
+        language="en"
+      />,
+    );
+    expect(screen.getByText('Tier-1 Grounded Summary')).toBeInTheDocument();
+    expect(container.querySelector('section')).toHaveAttribute('aria-busy', 'true');
   });
 });
 

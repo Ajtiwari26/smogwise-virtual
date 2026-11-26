@@ -6,15 +6,12 @@ import type {
   Dispatch, KeyboardEvent, MutableRefObject, RefObject, SetStateAction,
 } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isWithinIndiaCoords } from '../domain/cityPresets.js';
 import type { CustomLocation, LocationSearchItem } from '../domain/types.js';
 import { searchLocations } from '../services/apiClient.js';
 
 const SEARCH_DEBOUNCE_MS = 350;
 const GEO_TIMEOUT_MS = 8000;
-const INDIA_LAT_MIN = 6.5;
-const INDIA_LAT_MAX = 37.5;
-const INDIA_LON_MIN = 68.0;
-const INDIA_LON_MAX = 97.5;
 
 export interface SearchState {
   readonly results: readonly LocationSearchItem[];
@@ -30,16 +27,7 @@ const INITIAL_SEARCH_STATE: SearchState = {
   activeIndex: -1,
 };
 
-function isWithinIndiaBounds(lat: number, lon: number): boolean {
-  return (
-    Number.isFinite(lat)
-    && Number.isFinite(lon)
-    && lat >= INDIA_LAT_MIN
-    && lat <= INDIA_LAT_MAX
-    && lon >= INDIA_LON_MIN
-    && lon <= INDIA_LON_MAX
-  );
-}
+
 
 function formatDisplayLocation(loc: CustomLocation): string {
   const state = loc.state?.trim() ?? '';
@@ -155,7 +143,7 @@ function useGeolocationTrigger(
         setIsLocating(false);
         const lat = Math.round(pos.coords.latitude * 10000) / 10000;
         const lon = Math.round(pos.coords.longitude * 10000) / 10000;
-        if (!isWithinIndiaBounds(lat, lon)) {
+        if (!isWithinIndiaCoords(lat, lon)) {
           setStatusMessage(isHindi ? 'निर्देशांक भारत से बाहर हैं।' : 'Coordinates outside India.');
           return;
         }

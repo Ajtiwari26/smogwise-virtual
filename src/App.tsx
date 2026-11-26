@@ -33,6 +33,8 @@ function buildBannerProps(state: UseSmogPlanResult): SmogAlertBannerProps {
     ...pickBannerField('observedAt', aqMeta?.observedAt, report.observedAt),
     ...pickBannerField('fallbackStationName', aqMeta?.fallbackStationName, report.fallbackStationName),
     ...pickBannerField('fallbackDistanceKm', aqMeta?.fallbackDistanceKm, report.fallbackDistanceKm),
+    ...pickBannerField('livePm10', report.livePm10, undefined),
+    ...pickBannerField('liveNo2', report.liveNo2, undefined),
     ...pickBannerField('aqiError', aqiError, undefined),
   };
 }

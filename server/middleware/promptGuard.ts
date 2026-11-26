@@ -4,11 +4,21 @@
  */
 
 import { z } from 'zod';
-import { CustomLocationSchema, stripZeroWidthAndBidi } from './locationGuard.js';
+import {
+  CustomLocationSchema,
+  isUnsafeCityInput,
+  stripZeroWidthAndBidi,
+} from './locationGuard.js';
 
 export * from './locationGuard.js';
 
-const PERSONAS = ['young_family', 'sensitive_household', 'rwa_coordinator'] as const;
+const PERSONAS = [
+  'young_family',
+  'sensitive_household',
+  'rwa_coordinator',
+  'office_commuter',
+  'outdoor_student',
+] as const;
 const LANGUAGES = ['en', 'hi'] as const;
 const COMMUTE_MODES = [
   'petrol_car',
@@ -30,7 +40,12 @@ const IAQ_HACKS = [
 /** Zod schema validating a household UserProfile payload. */
 export const UserProfileSchema = z.object({
   persona: z.enum(PERSONAS),
-  cityId: z.string().trim().min(2).max(64),
+  cityId: z
+    .string()
+    .trim()
+    .min(2)
+    .max(64)
+    .refine((val) => !isUnsafeCityInput(val), 'Unsafe city identifier'),
   language: z.enum(LANGUAGES),
   householdSize: z.number().int().min(1).max(20),
   hasVulnerableMember: z.boolean(),
@@ -56,7 +71,13 @@ export const AiAskSchema = z
   .object({
     question: z.string().trim().min(1).max(1000).optional(),
     query: z.string().trim().min(1).max(1000).optional(),
-    city: z.string().trim().min(1).max(80).optional(),
+    city: z
+      .string()
+      .trim()
+      .min(1)
+      .max(80)
+      .refine((val) => !isUnsafeCityInput(val), 'Unsafe city identifier')
+      .optional(),
     language: z.enum(LANGUAGES).optional(),
     profile: UserProfileSchema.optional(),
   })
@@ -99,8 +120,9 @@ const DIRECT_RULES: readonly PatternRule[] = [
   {
     reason: 'medical_or_dan_jailbreak',
     regex: new RegExp(
-      '\\b(you\\s+are\\s+dan|prescribe|prednisone|dosage|mg\\s+dose'
-        + '|inhaler|steroid|tablet|milligrams)\\b',
+      '\\b(you\\s+are\\s+dan|prescribe|prednisone|dosage|mg\\s+dose|milligrams'
+        + '|recommend\\s+(?:a|an|some|exact)?\\s*(?:[a-z]+\\s+){0,3}'
+        + '(?:tablet|dosage|medication|prescription|steroid))\\b',
       'i',
     ),
   },

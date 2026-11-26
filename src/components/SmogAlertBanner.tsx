@@ -13,6 +13,8 @@ export interface SmogAlertBannerProps {
   readonly observedAt?: string;
   readonly fallbackStationName?: string;
   readonly fallbackDistanceKm?: number;
+  readonly livePm10?: number;
+  readonly liveNo2?: number;
   readonly aqiError?: string;
 }
 
@@ -140,10 +142,39 @@ interface BannerModel {
   readonly fallbackText: string | undefined;
 }
 
+function resolveComputedCpcb(
+  city: CityPreset,
+  dataSource: 'live_open_meteo' | 'city_preset',
+  livePm10: number | undefined,
+  liveNo2: number | undefined,
+) {
+  if (dataSource === 'live_open_meteo') {
+    return computeCpcbAqi(city.baselinePm25, livePm10, liveNo2);
+  }
+  return computeCpcbAqi(city.baselinePm25, city.baselinePm10, city.baselineNo2);
+}
+
+function formatPollutantSummary(params: {
+  readonly city: CityPreset;
+  readonly dataSource: 'live_open_meteo' | 'city_preset';
+  readonly livePm10: number | undefined;
+  readonly liveNo2: number | undefined;
+  readonly istTime: string | undefined;
+}): string {
+  const { city, dataSource, livePm10, liveNo2, istTime } = params;
+  const resolvedPm10 = dataSource === 'live_open_meteo' ? livePm10 : city.baselinePm10;
+  const resolvedNo2 = dataSource === 'live_open_meteo' ? liveNo2 : city.baselineNo2;
+  const parts = [`PM2.5: ${String(city.baselinePm25)} ug/m3`];
+  if (resolvedPm10 !== undefined) parts.push(`PM10: ${String(resolvedPm10)} ug/m3`);
+  if (resolvedNo2 !== undefined) parts.push(`NO2: ${String(resolvedNo2)} ug/m3`);
+  if (istTime !== undefined) parts.push(istTime);
+  return parts.join(' · ');
+}
+
 function buildBannerModel(props: SmogAlertBannerProps): BannerModel {
   const { city, language, optimalVentilationWindow, dataSource = 'city_preset' } = props;
   const isHi = language === 'hi';
-  const computed = computeCpcbAqi(city.baselinePm25, city.baselinePm10, city.baselineNo2);
+  const computed = resolveComputedCpcb(city, dataSource, props.livePm10, props.liveNo2);
   const resolvedAqi = props.cpcbAqi ?? computed.aqi;
   const resolvedDominant = props.dominantPollutant ?? computed.dominantPollutant;
   const band = classifyAqiBand(resolvedAqi);
@@ -167,10 +198,15 @@ function buildBannerModel(props: SmogAlertBannerProps): BannerModel {
 interface BannerBadgesRowProps {
   readonly city: CityPreset;
   readonly model: BannerModel;
+  readonly pollutantSummary: string;
 }
 
-function BannerBadgesRow({ city, model }: BannerBadgesRowProps): React.ReactElement {
-  const { isHi, resolvedAqi, resolvedDominant, band, istTime, sourceLabel } = model;
+function BannerBadgesRow({
+  city,
+  model,
+  pollutantSummary,
+}: BannerBadgesRowProps): React.ReactElement {
+  const { isHi, resolvedAqi, resolvedDominant, band, sourceLabel } = model;
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -189,10 +225,7 @@ function BannerBadgesRow({ city, model }: BannerBadgesRowProps): React.ReactElem
         </span>
         <h2 className="text-sm font-bold text-slate-900">{isHi ? city.nameHi : city.name}</h2>
       </div>
-      <p className="text-xs font-semibold text-slate-800">
-        PM2.5: {city.baselinePm25} ug/m3 · PM10: {city.baselinePm10} ug/m3 · NO2:{' '}
-        {city.baselineNo2} ug/m3{istTime !== undefined ? ` · ${istTime}` : ''}
-      </p>
+      <p className="text-xs font-semibold text-slate-800">{pollutantSummary}</p>
     </div>
   );
 }
@@ -200,8 +233,15 @@ function BannerBadgesRow({ city, model }: BannerBadgesRowProps): React.ReactElem
 /** Accessible CPCB smog severity banner with assertive alert on Severe / GRAP-IV. */
 export const SmogAlertBanner: React.FC<SmogAlertBannerProps> = React.memo(
   function SmogAlertBanner(props) {
-    const { city, aqiError } = props;
+    const { city, aqiError, dataSource = 'city_preset', livePm10, liveNo2 } = props;
     const model = buildBannerModel(props);
+    const pollutantSummary = formatPollutantSummary({
+      city,
+      dataSource,
+      livePm10,
+      liveNo2,
+      istTime: model.istTime,
+    });
 
     return (
       <section
@@ -209,7 +249,7 @@ export const SmogAlertBanner: React.FC<SmogAlertBannerProps> = React.memo(
         aria-live={model.isUrgent ? 'assertive' : 'polite'}
         className={`rounded-lg border-l-4 p-4 shadow-sm ${model.band.bannerClass}`}
       >
-        <BannerBadgesRow city={city} model={model} />
+        <BannerBadgesRow city={city} model={model} pollutantSummary={pollutantSummary} />
 
         {model.fallbackText !== undefined && (
           <p className="mt-1.5 text-xs font-medium text-slate-800">{model.fallbackText}</p>

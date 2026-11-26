@@ -72,10 +72,11 @@ const LanguageSwitcher: React.FC<{
 });
 
 const CityPicker: React.FC<{
-  readonly cityId: string;
+  readonly city: CityPreset;
   readonly isHi: boolean;
   readonly onCityChange: (cityId: string) => void;
-}> = React.memo(function CityPicker({ cityId, isHi, onCityChange }) {
+}> = React.memo(function CityPicker({ city, isHi, onCityChange }) {
+  const isCustomCity = !CITY_PRESETS.some((p) => p.id === city.id);
   return (
     <div className="flex items-center gap-2">
       <label htmlFor="header-city-select" className="text-xs font-semibold text-slate-800">
@@ -83,10 +84,13 @@ const CityPicker: React.FC<{
       </label>
       <select
         id="header-city-select"
-        value={cityId}
+        value={city.id}
         onChange={(e) => onCityChange(e.target.value)}
         className="rounded-md border border-slate-400 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus-visible:ring-2 focus-visible:ring-teal-700"
       >
+        {isCustomCity && (
+          <option value={city.id}>{isHi ? city.nameHi : city.name}</option>
+        )}
         {CITY_PRESETS.map((preset) => (
           <option key={preset.id} value={preset.id}>
             {isHi ? preset.nameHi : preset.name}
@@ -150,7 +154,7 @@ export const Header: React.FC<HeaderProps> = React.memo(function Header({
         </nav>
 
         <div className="flex flex-wrap items-center gap-3">
-          <CityPicker cityId={city.id} isHi={isHi} onCityChange={onCityChange} />
+          <CityPicker city={city} isHi={isHi} onCityChange={onCityChange} />
           <LanguageSwitcher language={language} onChange={onLanguageChange} />
         </div>
       </div>

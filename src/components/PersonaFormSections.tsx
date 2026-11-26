@@ -26,6 +26,8 @@ const PERSONA_OPTIONS: readonly BilingualOption<PersonaType>[] = [
   { id: 'young_family', en: 'Young Family', hi: 'युवा परिवार' },
   { id: 'sensitive_household', en: 'Sensitive Household (Elderly/Asthma)', hi: 'संवेदनशील परिवार (बुजुर्ग/अस्थमा)' },
   { id: 'rwa_coordinator', en: 'RWA / Community Coordinator', hi: 'RWA / समुदाय समन्वयक' },
+  { id: 'office_commuter', en: 'Daily Office Commuter', hi: 'दैनिक ऑफिस यात्री' },
+  { id: 'outdoor_student', en: 'School / Outdoor Student', hi: 'स्कूल / बाहरी छात्र' },
 ];
 
 const COMMUTE_OPTIONS: readonly BilingualOption<CommuteMode>[] = [

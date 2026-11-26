@@ -75,36 +75,51 @@ function resolveBaseCity(profile: UserProfile): CityPreset {
     ...basePreset,
     id: `custom_${slugifyLocationName(cleanName)}`,
     name: displayName,
-    nameHi: cleanName,
+    nameHi: displayName,
     lat: custom.lat,
     lon: custom.lon,
   };
 }
 
+interface LiveAqResolution {
+  readonly city: CityPreset;
+  readonly dataSource: 'live_open_meteo' | 'city_preset';
+  readonly livePm10?: number;
+  readonly liveNo2?: number;
+}
+
+function sanitizeOptionalPollutant(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return round2(value);
+}
+
 function applyLiveAqOverride(
   preset: CityPreset,
   liveAq?: LiveAqOverride,
-): { readonly city: CityPreset; readonly dataSource: 'live_open_meteo' | 'city_preset' } {
+): LiveAqResolution {
   if (liveAq === undefined || !Number.isFinite(liveAq.pm25) || liveAq.pm25 < 0) {
     return { city: preset, dataSource: 'city_preset' };
   }
   const normalizedPm25 = round2(liveAq.pm25);
+  const effectivePm10 = sanitizeOptionalPollutant(liveAq.pm10);
+  const effectiveNo2 = sanitizeOptionalPollutant(liveAq.no2);
+  const dataSource =
+    liveAq.fallbackStationName !== undefined ? 'city_preset' : 'live_open_meteo';
   const city: CityPreset = {
     ...preset,
     baselinePm25: normalizedPm25,
-    baselinePm10:
-      liveAq.pm10 !== undefined && Number.isFinite(liveAq.pm10)
-        ? round2(Math.max(0, liveAq.pm10))
-        : preset.baselinePm10,
-    baselineNo2:
-      liveAq.no2 !== undefined && Number.isFinite(liveAq.no2)
-        ? round2(Math.max(0, liveAq.no2))
-        : preset.baselineNo2,
+    baselinePm10: effectivePm10 ?? preset.baselinePm10,
+    baselineNo2: effectiveNo2 ?? preset.baselineNo2,
     grapStage: deriveGrapStageFromPm25(normalizedPm25),
   };
-  const dataSource =
-    liveAq.fallbackStationName !== undefined ? 'city_preset' : 'live_open_meteo';
-  return { city, dataSource };
+  return {
+    city,
+    dataSource,
+    ...(effectivePm10 !== undefined ? { livePm10: effectivePm10 } : {}),
+    ...(effectiveNo2 !== undefined ? { liveNo2: effectiveNo2 } : {}),
+  };
 }
 
 const INDOOR_WHO_TARGET_UG_M3 = 30;
@@ -163,8 +178,11 @@ export function computeDeterministicReport(
   liveAq?: LiveAqOverride,
 ): DeterministicReport {
   const basePreset = resolveBaseCity(profile);
-  const { city, dataSource } = applyLiveAqOverride(basePreset, liveAq);
-  const cpcb = computeCpcbAqi(city.baselinePm25, city.baselinePm10, city.baselineNo2);
+  const { city, dataSource, livePm10, liveNo2 } = applyLiveAqOverride(basePreset, liveAq);
+  const cpcb =
+    dataSource === 'live_open_meteo'
+      ? computeCpcbAqi(city.baselinePm25, livePm10, liveNo2)
+      : computeCpcbAqi(city.baselinePm25, city.baselinePm10, city.baselineNo2);
   const exposure = computeExposureMetrics(profile, city.baselinePm25);
   const emissions = computeEmissionsMetrics(profile);
   const rankedHacks = rankIAQHacksByBudget(profile);
@@ -177,6 +195,8 @@ export function computeDeterministicReport(
     cpcbAqi: cpcb.aqi,
     aqiBand: cpcb.band,
     dominantPollutant: cpcb.dominantPollutant,
+    ...(livePm10 !== undefined ? { livePm10 } : {}),
+    ...(liveNo2 !== undefined ? { liveNo2 } : {}),
     ...resolveOptionalMetadata(liveAq),
     exposure,
     emissions,

@@ -4,6 +4,7 @@
  */
 
 import { z } from 'zod';
+import { INDIA_BOUNDS } from '../../src/domain/cityPresets.js';
 
 /** Balanced character class for safe city names (no escaped brackets). */
 export const SAFE_CITY_RE = /^[\p{L}\p{N} .\-()]{1,64}$/u;
@@ -158,10 +159,7 @@ export const StrictCoordSchema = z
   .transform(Number)
   .pipe(z.number().finite());
 
-const INDIA_LAT_MIN = 6.5;
-const INDIA_LAT_MAX = 37.5;
-const INDIA_LON_MIN = 68.0;
-const INDIA_LON_MAX = 97.5;
+
 
 const OptionalSafeLabelSchema = z
   .string()
@@ -218,11 +216,23 @@ function validateAqiPair(
     return;
   }
   validateIndiaCoord(
-    { raw: lat, min: INDIA_LAT_MIN, max: INDIA_LAT_MAX, field: 'lat', label: 'Latitude' },
+    {
+      raw: lat,
+      min: INDIA_BOUNDS.latMin,
+      max: INDIA_BOUNDS.latMax,
+      field: 'lat',
+      label: 'Latitude',
+    },
     ctx,
   );
   validateIndiaCoord(
-    { raw: lon, min: INDIA_LON_MIN, max: INDIA_LON_MAX, field: 'lon', label: 'Longitude' },
+    {
+      raw: lon,
+      min: INDIA_BOUNDS.lonMin,
+      max: INDIA_BOUNDS.lonMax,
+      field: 'lon',
+      label: 'Longitude',
+    },
     ctx,
   );
 }
@@ -277,7 +287,7 @@ export const CustomLocationSchema = z
       .string()
       .transform((s) => sanitizeLocationText(s))
       .optional(),
-    lat: z.number().finite().min(INDIA_LAT_MIN).max(INDIA_LAT_MAX),
-    lon: z.number().finite().min(INDIA_LON_MIN).max(INDIA_LON_MAX),
+    lat: z.number().finite().min(INDIA_BOUNDS.latMin).max(INDIA_BOUNDS.latMax),
+    lon: z.number().finite().min(INDIA_BOUNDS.lonMin).max(INDIA_BOUNDS.lonMax),
   })
   .strict();

@@ -6,8 +6,13 @@ import {
   stripCitationTags,
 } from '../../server/middleware/locationGuard.js';
 import { computeCpcbAqi } from '../../src/domain/cpcbAqi.js';
+import { buildRwaNotice, formatLocalizedSummary } from '../../src/domain/i18n.js';
 import { SAMPLE_SCENARIOS } from '../../src/domain/sampleScenarios.js';
-import { computeFullPlan } from '../../src/domain/impactService.js';
+import {
+  computeDeterministicReport,
+  computeFullPlan,
+} from '../../src/domain/impactService.js';
+import type { UserProfile } from '../../src/domain/types.js';
 
 describe('computeCpcbAqi deterministic CPCB NAQI calculator', () => {
   it('maps concentrations across all 6 CPCB NAQI bands accurately', () => {
@@ -67,8 +72,8 @@ describe('computeCpcbAqi deterministic CPCB NAQI calculator', () => {
 });
 
 describe('SAMPLE_SCENARIOS deterministic plan integration', () => {
-  it('includes 4 presets each yielding CALC:INDOOR_TARGET and SCI:PLANTS_VS_HEPA', () => {
-    expect(SAMPLE_SCENARIOS).toHaveLength(4);
+  it('includes 5 presets each yielding CALC:INDOOR_TARGET and SCI:PLANTS_VS_HEPA', () => {
+    expect(SAMPLE_SCENARIOS).toHaveLength(5);
     for (const scenario of SAMPLE_SCENARIOS) {
       const report = computeFullPlan(scenario.profile);
       expect(report.citations['CALC:INDOOR_TARGET']).toBeDefined();
@@ -100,5 +105,76 @@ describe('locationGuard sanitization and coordinate validation', () => {
     expect(StrictCoordSchema.safeParse('-77.09').success).toBe(true);
     expect(StrictCoordSchema.safeParse('22.7196abc').success).toBe(false);
     expect(StrictCoordSchema.safeParse('NaN').success).toBe(false);
+  });
+});
+
+const BASE_PROFILE: UserProfile = {
+  persona: 'young_family',
+  cityId: 'delhi_anand_vihar',
+  language: 'en',
+  householdSize: 4,
+  hasVulnerableMember: false,
+  monthlyBudgetInr: 4000,
+  roomVolumeM3: 90,
+  commuteMode: 'two_wheeler',
+  commuteDistanceKm: 20,
+  cookingFuel: 'lpg',
+  activeHacks: [],
+};
+
+describe('persona differentiation, PM10 summary, RWA notice, and PM2.5-only live AQ', () => {
+  it('differentiates commute personas in delhi_anand_vihar', () => {
+    const family = computeFullPlan({ ...BASE_PROFILE, persona: 'young_family' });
+    const commuter = computeFullPlan({ ...BASE_PROFILE, persona: 'office_commuter' });
+    const student = computeFullPlan({ ...BASE_PROFILE, persona: 'outdoor_student' });
+
+    const familyDose = family.report.exposure.baselineInhaledUgPerDay;
+    expect(commuter.report.exposure.baselineInhaledUgPerDay).toBeGreaterThan(familyDose);
+    expect(student.report.exposure.baselineInhaledUgPerDay).toBeGreaterThan(familyDose);
+
+    const familyMorning = family.routine.find((s) => s.id === 'morning_inversion')?.title;
+    const commuterMorning = commuter.routine.find((s) => s.id === 'morning_inversion')?.title;
+    const studentMorning = student.routine.find((s) => s.id === 'morning_inversion')?.title;
+
+    expect(commuterMorning).toBeDefined();
+    expect(studentMorning).toBeDefined();
+    expect(commuterMorning).not.toBe(familyMorning);
+    expect(studentMorning).not.toBe(familyMorning);
+  });
+
+  it('formats localized summary using PM10-driven Poor CPCB band in en and hi', () => {
+    const report = computeDeterministicReport(BASE_PROFILE, { pm25: 40, pm10: 280 });
+    expect(report.aqiBand).toBe('poor');
+
+    const enSummary = formatLocalizedSummary(report, 'en');
+    const hiSummary = formatLocalizedSummary(report, 'hi');
+
+    expect(enSummary).toContain('Poor');
+    expect(enSummary).not.toContain('Satisfactory');
+    expect(hiSummary).toContain('खराब');
+    expect(hiSummary).not.toContain('Satisfactory');
+  });
+
+  it('renders unconfigured RWA notice when rwaHouseholds is 0 or undefined', () => {
+    const enProfile: UserProfile = { ...BASE_PROFILE, language: 'en', rwaHouseholds: 0 };
+    const hiProfile: UserProfile = { ...BASE_PROFILE, language: 'hi' };
+    const enReport = computeDeterministicReport(enProfile);
+    const hiReport = computeDeterministicReport(hiProfile);
+
+    const enNotice = buildRwaNotice(enProfile, enReport);
+    const hiNotice = buildRwaNotice(hiProfile, hiReport);
+
+    expect(enNotice).not.toContain('50 flats');
+    expect(enNotice).not.toContain('avoids 0 kg');
+    expect(enNotice).toContain('Configure participating flats');
+    expect(hiNotice).toContain('RWA कम्युनिटी पैनल');
+  });
+
+  it('computes PM2.5-only live report without falling back to Delhi PM10', () => {
+    const report = computeDeterministicReport(BASE_PROFILE, { pm25: 55 });
+    expect(report.dataSource).toBe('live_open_meteo');
+    expect(report.livePm10).toBeUndefined();
+    expect(report.liveNo2).toBeUndefined();
+    expect(report.cpcbAqi).toBe(computeCpcbAqi(55).aqi);
   });
 });

@@ -5,6 +5,26 @@
 
 import type { CityPreset } from './types.js';
 
+/** Geographic bounding box covering mainland and island India coordinates. */
+export const INDIA_BOUNDS = {
+  latMin: 6.5,
+  latMax: 37.5,
+  lonMin: 68.0,
+  lonMax: 97.5,
+} as const;
+
+/** Returns true when finite latitude and longitude lie inside INDIA_BOUNDS. */
+export function isWithinIndiaCoords(lat: number, lon: number): boolean {
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lon) &&
+    lat >= INDIA_BOUNDS.latMin &&
+    lat <= INDIA_BOUNDS.latMax &&
+    lon >= INDIA_BOUNDS.lonMin &&
+    lon <= INDIA_BOUNDS.lonMax
+  );
+}
+
 /** Curated list of 12 winter inversion and urban smog city presets. */
 export const CITY_PRESETS: readonly CityPreset[] = [
   {
