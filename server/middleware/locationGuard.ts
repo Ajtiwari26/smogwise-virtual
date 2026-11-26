@@ -10,7 +10,7 @@ import { INDIA_BOUNDS } from '../../src/domain/cityPresets.js';
 export const SAFE_CITY_RE = /^[\p{L}\p{N} .\-()]{1,64}$/u;
 
 /** Balanced character class for canonical preset IDs (allows underscore). */
-export const SAFE_CITY_ID_RE = /^[\p{L}\p{N}_ .\-()]{1,64}$/u;
+export const SAFE_CITY_ID_RE = /^[\p{L}\p{N}_ .\-()]{2,64}$/u;
 
 const CITATION_PREFIXES = [
   '[CALC:',

@@ -87,6 +87,10 @@ export function buildUserPrompt(
     cpcbAqi: report.cpcbAqi,
     aqiBand: report.aqiBand,
     dominantPollutant: report.dominantPollutant,
+    ...(profile.rwaHouseholds !== undefined ? { rwaHouseholds: profile.rwaHouseholds } : {}),
+    ...(profile.rwaAdoptionRate !== undefined
+      ? { rwaAdoptionRate: profile.rwaAdoptionRate }
+      : {}),
     exposure: report.exposure,
     emissions: report.emissions,
     citations: report.citations,

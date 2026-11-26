@@ -102,4 +102,29 @@ describe('GET /api/aqi pan-India coordinates, IST timestamps, and fallbacks', ()
     expect(udaipurRes.status).toBe(503);
     expect(udaipurRes.body.error).toBe('LIVE_AQ_UNAVAILABLE');
   });
+
+  it('refreshes liveAq.sourceLabel for caller town name on 0.05 deg quantized cache hit', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          current: {
+            pm2_5: 90,
+            pm10: 130,
+            nitrogen_dioxide: 25,
+            time: '2026-11-26T10:00',
+          },
+        }),
+      ),
+    );
+    const app = createApp();
+    const first = await request(app).get('/api/aqi?lat=26.91&lon=75.79&name=JaipurNorth&state=Rajasthan');
+    expect(first.status).toBe(200);
+    expect(first.body.liveAq.sourceLabel).toContain('JaipurNorth');
+
+    const second = await request(app).get('/api/aqi?lat=26.92&lon=75.78&name=AmerRoad&state=Rajasthan');
+    expect(second.status).toBe(200);
+    expect(second.body.cached).toBe(true);
+    expect(second.body.liveAq.sourceLabel).toContain('AmerRoad');
+  });
 });

@@ -44,7 +44,7 @@ export function toUserProfile(parsed: ParsedProfile): UserProfile {
     commuteMode: parsed.commuteMode,
     commuteDistanceKm: parsed.commuteDistanceKm,
     cookingFuel: parsed.cookingFuel,
-    activeHacks: parsed.activeHacks,
+    activeHacks: Array.from(new Set(parsed.activeHacks)),
     ...(customLocation !== undefined ? { customLocation } : {}),
     ...(parsed.rwaHouseholds !== undefined ? { rwaHouseholds: parsed.rwaHouseholds } : {}),
     ...(parsed.rwaAdoptionRate !== undefined ? { rwaAdoptionRate: parsed.rwaAdoptionRate } : {}),

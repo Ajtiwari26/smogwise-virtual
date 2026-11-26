@@ -144,6 +144,27 @@ export async function fetchAirQualityForCity(rawCityId: string): Promise<AirQual
   });
 }
 
+function withCallerCity(
+  result: AirQualityLookupResult,
+  syntheticCity: ReturnType<typeof buildSyntheticCityPreset>,
+  isCacheHit: boolean,
+): AirQualityLookupResult {
+  const live = result.liveAq;
+  const refreshedLive =
+    live !== undefined && live.fallbackStationName === undefined
+      ? {
+          ...live,
+          sourceLabel: `Open-Meteo Live AQ (${syntheticCity.name}: PM2.5 ${String(Math.round(live.pm25))} ug/m3)`,
+        }
+      : live;
+  return {
+    ...result,
+    city: syntheticCity,
+    ...(refreshedLive !== undefined ? { liveAq: refreshedLive } : {}),
+    ...(isCacheHit ? { cached: true } : {}),
+  };
+}
+
 /** Fetches live Open-Meteo AQ metrics for custom Indian coordinates with <= 50 km fallback. */
 export async function fetchAirQualityForCoords(
   input: CoordinateAqInput,
@@ -155,7 +176,7 @@ export async function fetchAirQualityForCoords(
   const syntheticCity = buildSyntheticCityPreset(input, nearest.preset);
   const cached = customAqCache.get(cacheKey);
   if (cached !== undefined) {
-    return { ...cached, city: syntheticCity, cached: true };
+    return withCallerCity(cached, syntheticCity, true);
   }
   const result = await aqSingleflight.run(cacheKey, async () => {
     const liveAq = await fetchOpenMeteo(input.lat, input.lon, syntheticCity.name);
@@ -169,7 +190,9 @@ export async function fetchAirQualityForCoords(
     }
     return buildNearestFallbackResult(syntheticCity, nearest.preset, nearest.distanceKm);
   });
-  return result.city.id === syntheticCity.id ? result : { ...result, city: syntheticCity };
+  return result.city.id === syntheticCity.id
+    ? result
+    : withCallerCity(result, syntheticCity, false);
 }
 
 /** Clears preset, custom coordinate, and in-flight Open-Meteo AQ caches. */

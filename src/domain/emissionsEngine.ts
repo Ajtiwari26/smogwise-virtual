@@ -56,7 +56,7 @@ function clampHouseholds(count: number | undefined): number {
 
 function sumActiveHacksCostInr(activeHacks: readonly IAQHackId[]): number {
   let total = 0;
-  for (const id of activeHacks) {
+  for (const id of new Set(activeHacks)) {
     total += IAQ_HACK_SPECS[id].monthlyCostInr;
   }
   return total;

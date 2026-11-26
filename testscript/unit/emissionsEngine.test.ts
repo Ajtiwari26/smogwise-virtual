@@ -99,4 +99,12 @@ describe('emissionsEngine budget ranking & RWA scaling', () => {
       1,
     );
   });
+
+  it('deduplicates duplicate activeHacks so monthly INR cost is counted once per hack', () => {
+    const single = computeRawDailyEmissions(makeProfile({ activeHacks: ['hepa_purifier'] }));
+    const duped = computeRawDailyEmissions(
+      makeProfile({ activeHacks: ['hepa_purifier', 'hepa_purifier', 'hepa_purifier'] }),
+    );
+    expect(duped.monthlyOperatingCostInr).toBe(single.monthlyOperatingCostInr);
+  });
 });

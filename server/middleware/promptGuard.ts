@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import {
   CustomLocationSchema,
+  escapeXml,
   isUnsafeCityInput,
   stripZeroWidthAndBidi,
 } from './locationGuard.js';
@@ -153,8 +154,12 @@ const DIRECT_RULES: readonly PatternRule[] = [
 ];
 
 const BASE64_TOKEN_RE =
-  /(?:^|[^A-Za-z0-9+/])([A-Za-z0-9+/]{16,}={0,2})(?:$|[^A-Za-z0-9+/=])/g;
-const BASE64_THREAT_RE = /ignore|rules|secret|system|prompt|api_key|password|leak/i;
+  /(?:^|[^A-Za-z0-9+/_-])([A-Za-z0-9+/_-]{16,}={0,2})(?:$|[^A-Za-z0-9+/_=-])/g;
+const BASE64_THREAT_RE = new RegExp(
+  'ignore|rules|secret|system|prompt|api_key|password|leak|' +
+    'prednisone|dosage|instructions|override|jailbreak|token|env|169\\.254',
+  'i',
+);
 
 function hasMarkdownImageExfil(text: string): boolean {
   const bangIdx = text.indexOf('![');
@@ -172,7 +177,8 @@ function hasBase64Override(text: string): boolean {
       continue;
     }
     try {
-      const decoded = Buffer.from(token, 'base64').toString('utf8');
+      const stdBase64 = token.replace(/-/g, '+').replace(/_/g, '/');
+      const decoded = Buffer.from(stdBase64, 'base64').toString('utf8');
       if (BASE64_THREAT_RE.test(decoded)) {
         return true;
       }
@@ -228,8 +234,7 @@ export function inspectAndSanitizePrompt(rawText: string): PromptInspectionResul
  * Wraps sanitized user text in structural XML delimiters to isolate untrusted input.
  */
 export function wrapXmlUserQuery(text: string): string {
-  const escaped = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return `<user_query>${escaped}</user_query>`;
+  return `<user_query>${escapeXml(text)}</user_query>`;
 }
 
 /**
