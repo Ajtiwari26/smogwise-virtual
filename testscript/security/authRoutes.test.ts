@@ -4,6 +4,7 @@ import { createApp } from '../../server/app.js';
 import type { UserProfile } from '../../src/domain/types.js';
 
 const VALID_PASSWORD = 'SmogWise#Eval2026';
+const TAMPERED_COOKIE = 'smogwise_session=eyJzdWIiOiJldmFsX2ZhbWlseSJ9.invalidsig';
 
 const SAMPLE_PROFILE: UserProfile = {
   persona: 'young_family',
@@ -31,25 +32,22 @@ function extractCookiePair(setCookieHeader: string[] | string | undefined): stri
   return firstSegment.trim();
 }
 
-describe('Protected auth & preferences access control', () => {
-  it('returns 401 and no-store when unauthenticated across protected routes', async () => {
+describe('Protected preferences access & public session/logout behavior', () => {
+  it('returns 401 and no-store when unauthenticated on /api/user/preferences', async () => {
     const app = createApp();
-    const checks = await Promise.all([
-      request(app).get('/api/auth/session'),
-      request(app).post('/api/auth/logout'),
-      request(app).get('/api/user/preferences'),
-      request(app).put('/api/user/preferences').send({ profile: SAMPLE_PROFILE }),
-    ]);
-    for (const res of checks) {
-      expect(res.status).toBe(401);
-      expect(res.headers['cache-control']).toBe('private, no-store');
-    }
+    const getRes = await request(app).get('/api/user/preferences');
+    expect(getRes.status).toBe(401);
+    expect(getRes.headers['cache-control']).toBe('private, no-store');
+
+    const putRes = await request(app).put('/api/user/preferences').send({ profile: SAMPLE_PROFILE });
+    expect(putRes.status).toBe(401);
+    expect(putRes.headers['cache-control']).toBe('private, no-store');
   });
 
-  it('rejects hardcoded backdoor bearer tokens and tampered session cookies with 401', async () => {
+  it('rejects bearer tokens and tampered cookie with 401 on /api/user/preferences', async () => {
     const app = createApp();
     const demoRes = await request(app)
-      .get('/api/auth/session')
+      .get('/api/user/preferences')
       .set('Authorization', 'Bearer demo-token');
     expect(demoRes.status).toBe(401);
     expect(demoRes.headers['cache-control']).toBe('private, no-store');
@@ -58,11 +56,42 @@ describe('Protected auth & preferences access control', () => {
       .get('/api/user/preferences')
       .set('Authorization', 'Bearer offline-demo-token');
     expect(offlineRes.status).toBe(401);
+    expect(offlineRes.headers['cache-control']).toBe('private, no-store');
 
     const tamperedRes = await request(app)
-      .get('/api/auth/session')
-      .set('Cookie', 'smogwise_session=eyJzdWIiOiJldmFsX2ZhbWlseSJ9.invalidsig');
+      .get('/api/user/preferences')
+      .set('Cookie', TAMPERED_COOKIE);
     expect(tamperedRes.status).toBe(401);
+    expect(tamperedRes.headers['cache-control']).toBe('private, no-store');
+  });
+
+  it('returns 200 and { authenticated: false, user: null } on unauthenticated session', async () => {
+    const app = createApp();
+    const anonRes = await request(app).get('/api/auth/session');
+    expect(anonRes.status).toBe(200);
+    expect(anonRes.headers['cache-control']).toBe('private, no-store');
+    expect(anonRes.body).toEqual({ authenticated: false, user: null });
+
+    const bearerRes = await request(app)
+      .get('/api/auth/session')
+      .set('Authorization', 'Bearer demo-token');
+    expect(bearerRes.status).toBe(200);
+    expect(bearerRes.headers['cache-control']).toBe('private, no-store');
+    expect(bearerRes.body).toEqual({ authenticated: false, user: null });
+
+    const tamperedRes = await request(app).get('/api/auth/session').set('Cookie', TAMPERED_COOKIE);
+    expect(tamperedRes.status).toBe(200);
+    expect(tamperedRes.headers['cache-control']).toBe('private, no-store');
+    expect(tamperedRes.body).toEqual({ authenticated: false, user: null });
+  });
+
+  it('returns 200, { ok: true }, and Max-Age=0 on unauthenticated POST /api/auth/logout', async () => {
+    const app = createApp();
+    const res = await request(app).post('/api/auth/logout');
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('private, no-store');
+    expect(res.body).toEqual({ ok: true });
+    expect(String(res.headers['set-cookie'])).toContain('Max-Age=0');
   });
 });
 
@@ -149,6 +178,7 @@ describe('Authenticated session, user preference isolation & logout', () => {
 
     const logoutRes = await request(app).post('/api/auth/logout').set('Cookie', cookie);
     expect(logoutRes.status).toBe(200);
+    expect(logoutRes.headers['cache-control']).toBe('private, no-store');
     expect(logoutRes.body).toEqual({ ok: true });
     expect(String(logoutRes.headers['set-cookie'])).toContain('Max-Age=0');
   });

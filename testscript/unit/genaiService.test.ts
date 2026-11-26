@@ -261,7 +261,7 @@ describe('generatePlanBriefing RWA cache invariance and interaction timeout opti
     clearBriefingCache();
   });
 
-  it('reuses cached briefing across rwaHouseholds and rwaAdoptionRate changes and passes timeout_ms 4500', async () => {
+  it('reuses cached briefing and singleton client with timeout_ms 4500', async () => {
     mockEnv(BASE_ENV.geminiApiKey);
     mockInteractionsCreate.mockResolvedValue({
       output_text: JSON.stringify({
@@ -277,6 +277,8 @@ describe('generatePlanBriefing RWA cache invariance and interaction timeout opti
 
     expect(first.mode).toBe('gemini_interactions');
     expect(mockInteractionsCreate).toHaveBeenCalledTimes(1);
+    const firstArg = mockInteractionsCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(firstArg['model']).toBe('gemini-3.5-flash-lite');
     const secondArg = mockInteractionsCreate.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(secondArg).toEqual({ timeout_ms: 4500 });
 
@@ -286,5 +288,34 @@ describe('generatePlanBriefing RWA cache invariance and interaction timeout opti
 
     expect(second).toEqual(first);
     expect(mockInteractionsCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds fallback timeout to remaining LLM budget after a slow primary failure', async () => {
+    mockEnv(BASE_ENV.geminiApiKey);
+    const profile = makeProfile();
+    const { report } = computeFullPlan(profile);
+    let nowMs = 10_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+
+    mockInteractionsCreate
+      .mockImplementationOnce(async () => {
+        nowMs += 4300;
+        throw new Error('Slow primary failure');
+      })
+      .mockResolvedValueOnce({
+        output_text: JSON.stringify({
+          headline: 'Bounded Fallback Briefing',
+          summary: 'Filtration cuts dose [CALC:DOSE_AFTER] [AQ:SOURCE].',
+          whyActions: ['HEPA traps fine winter particulates indoors.'],
+        }),
+      });
+
+    const res = await generatePlanBriefing(profile, report);
+    expect(res.mode).toBe('gemini_interactions');
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(2);
+    const fallbackCall = mockInteractionsCreate.mock.calls[1]?.[0] as Record<string, unknown>;
+    expect(fallbackCall['model']).toBe('gemini-4-hydrogen');
+    const fallbackOpts = mockInteractionsCreate.mock.calls[1]?.[1] as Record<string, unknown>;
+    expect(fallbackOpts).toEqual({ timeout_ms: 1200 });
   });
 });

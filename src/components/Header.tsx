@@ -167,12 +167,14 @@ export const Header: React.FC<HeaderProps> = React.memo(function Header({
                 : 'Winter Smog Family & Community Assistant'}
             </p>
           </div>
-          <span
-            className="rounded-full border border-teal-800 bg-teal-50 px-2.5 py-0.5 text-xs font-semibold text-teal-900"
-            aria-live="polite"
-          >
-            {sourceText}
-          </span>
+          {!isGateMode && (
+            <span
+              className="rounded-full border border-teal-800 bg-teal-50 px-2.5 py-0.5 text-xs font-semibold text-teal-900"
+              aria-live="polite"
+            >
+              {sourceText}
+            </span>
+          )}
         </div>
 
         <nav aria-label={isHi ? 'मुख्य नेविगेशन' : 'Primary navigation'}>

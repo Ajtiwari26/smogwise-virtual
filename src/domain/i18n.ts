@@ -331,6 +331,26 @@ function buildAfternoonDescription(
     : 'Ventilate 20 mins & wet-mop; PM2.5 remains high, so keep activities indoors.';
 }
 
+function buildEveningDescription(
+  profile: UserProfile,
+  isHi: boolean,
+  indoorPm25: number,
+  outdoorPm25: number,
+): string {
+  const base = pickText(PERSONA_ROUTINE_COPY[profile.persona].eveningDesc, isHi);
+  if (profile.cookingFuel === 'biomass_chulha') {
+    return isHi
+      ? `${base} इनडोर रसोई PM2.5 घटाने हेतु LPG/इंडक्शन अपनाएं या क्रॉस-वेंटिलेशन व एग्जॉस्ट रखें।`
+      : `${base} Switch to LPG/induction or use cross-ventilation/exhaust to cut indoor kitchen PM2.5.`;
+  }
+  if (indoorPm25 > outdoorPm25) {
+    return isHi
+      ? `${base} खाना बनाते समय रसोई एग्जॉस्ट और क्रॉस-वेंटिलेशन चालू रखें।`
+      : `${base} Keep kitchen exhaust and cross-ventilation active while cooking.`;
+  }
+  return base;
+}
+
 function buildNightDescription(isHi: boolean, indoorPm25: number): string {
   const gap = Math.max(0, Math.round((indoorPm25 - 30) * 10) / 10);
   if (isHi) {
@@ -383,7 +403,7 @@ export function generateDailyRoutine(
       id: 'evening_cooking',
       timeRange: '18:30 - 21:00',
       title: pickText(copy.eveningTitle, isHi),
-      description: pickText(copy.eveningDesc, isHi),
+      description: buildEveningDescription(profile, isHi, h19.indoor, h19.outdoor),
       outdoorPm25: h19.outdoor,
       indoorPm25: h19.indoor,
       category: 'cooking',

@@ -68,7 +68,7 @@ All domain modules are pure TypeScript functions with zero React, DOM, Node, or 
    - Scales household impact across `rwaHouseholds` $\times$ `rwaAdoptionRate` for community-wide $\text{kg CO}_2\text{e/month}$ and $\text{g PM}_{2.5}/\text{month}$ avoided.
 
 ### Tier 2: Grounded `@google/genai` Interactions API & Offline Fallback
-- **Primary LLM Integration:** Uses `@google/genai` (`>=3.5.0`) `ai.interactions.create({ model: 'gemini-4-hydrogen', ... })` with strict system instructions binding the model exclusively to the verified `DeterministicReport` JSON payload.
+- **Primary LLM Integration:** Uses `@google/genai` (`>=3.5.0`) `ai.interactions.create({ model: 'gemini-3.5-flash-lite', ... })` (reusing a cached client instance with a bounded `4500ms` primary / `1800ms` `gemini-4-hydrogen` fallback capped inside `5500ms` total LLM budget) with strict system instructions binding the model exclusively to the verified `DeterministicReport` JSON payload and explicit numeric values.
 - **Prompt Injection Defense:** User questions are sanitized and wrapped inside structural `<user_query>` delimiters while system rules explicitly prohibit overriding deterministic metrics or emitting ungrounded health/emission numbers.
 - **Deterministic Offline Fallback & Briefing (`POST /api/plan/briefing`):** Whenever `GEMINI_API_KEY` is absent, empty, or an upstream call times out/fails, `server/services/genaiService.ts` deterministically synthesizes localized English (`en`) or Hindi (`hi`) guidance and `AiPlanBriefingCard` briefings (surfaced under the `Tier-1 Grounded Summary` fallback badge) citing exact Tier 1 metrics (`doseReductionUgPerDay`, `optimalVentilationWindow`, `monthlyNetSavingsInr`, `communityCo2eAvoidedKgPerMonth`), backed by a bounded LRU cache.
 

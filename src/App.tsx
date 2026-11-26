@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AiPlanBriefingCard } from './components/AiPlanBriefingCard.js';
 import { DailyRoutineTimeline } from './components/DailyRoutineTimeline.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
@@ -112,22 +112,44 @@ function AppMainColumns({ state }: { readonly state: UseSmogPlanResult }): React
   );
 }
 
+function syncFetchedPreferences(
+  fetchedProfile: UserProfile | null,
+  fallbackProfile: UserProfile,
+  lastSyncedJsonRef: React.MutableRefObject<string | null>,
+  applySampleScenario: (scenarioProfile: UserProfile) => void,
+): void {
+  if (fetchedProfile !== null) {
+    lastSyncedJsonRef.current = JSON.stringify(fetchedProfile);
+    applySampleScenario(fetchedProfile);
+    return;
+  }
+  lastSyncedJsonRef.current = JSON.stringify(fallbackProfile);
+}
+
 function usePreferenceSync(
   profile: UserProfile,
   applySampleScenario: (scenarioProfile: UserProfile) => void,
 ): void {
   const [hasHydrated, setHasHydrated] = useState<boolean>(false);
+  const profileRef = useRef<UserProfile>(profile);
+  profileRef.current = profile;
+  const lastSyncedJsonRef = useRef<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     void (async () => {
       try {
         const res = await fetchUserPreferences(controller.signal);
-        if (!controller.signal.aborted && res.profile !== null) {
-          applySampleScenario(res.profile);
+        if (!controller.signal.aborted) {
+          syncFetchedPreferences(
+            res.profile,
+            profileRef.current,
+            lastSyncedJsonRef,
+            applySampleScenario,
+          );
         }
       } catch {
-        // Ignore preference fetch failures cleanly
+        lastSyncedJsonRef.current ??= JSON.stringify(profileRef.current);
       } finally {
         if (!controller.signal.aborted) {
           setHasHydrated(true);
@@ -138,11 +160,16 @@ function usePreferenceSync(
   }, [applySampleScenario]);
 
   useEffect(() => {
-    if (!hasHydrated) {
+    const serialized = JSON.stringify(profile);
+    if (!hasHydrated || serialized === lastSyncedJsonRef.current) {
       return undefined;
     }
     const timer = window.setTimeout(() => {
-      void saveUserPreferences(profile).catch(() => undefined);
+      void saveUserPreferences(profile)
+        .then(() => {
+          lastSyncedJsonRef.current = serialized;
+        })
+        .catch(() => undefined);
     }, 1000);
     return () => window.clearTimeout(timer);
   }, [hasHydrated, profile]);
@@ -216,7 +243,7 @@ export const App: React.FC = function App() {
     void (async () => {
       try {
         const res = await fetchSession(controller.signal);
-        if (!controller.signal.aborted && res.authenticated) {
+        if (!controller.signal.aborted && res.authenticated && res.user !== null) {
           setAuthUser(res.user);
         }
       } catch {

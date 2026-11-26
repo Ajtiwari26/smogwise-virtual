@@ -182,6 +182,16 @@ describe('apiClient auth and user preference endpoints', () => {
     }
   });
 
+  it('resolves unauthenticated session cleanly on 200 without throwing', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ authenticated: false, user: null }, 200));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchSession()).resolves.toEqual({ authenticated: false, user: null });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('throws ApiError with status 401 on failed loginSession', async () => {
     const errPayload = { error: 'INVALID_CREDENTIALS', message: 'Invalid credentials' };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(errPayload, 401)));

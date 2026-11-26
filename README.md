@@ -105,8 +105,8 @@ SmogWise Virtual protects the personalized household & RWA workspace behind a se
 - **Dedicated Brute-Force Protection & Zero Bypasses:** Auth routes are guarded by a dedicated `authLimiter` (`20 req / 15 min` per IP) in addition to global API rate limiting, and the client enforces strictly server-verified sessions with zero offline/catch login bypasses.
 - **Auth & Preference Endpoints:**
   - `POST /api/auth/login` — verifies email/password via `scryptSync` + `timingSafeEqual` and sets the `HttpOnly` session cookie.
-  - `POST /api/auth/logout` — clears the active session cookie.
-  - `GET /api/auth/session` — validates the `HMAC-SHA256` session cookie and returns the authenticated user profile.
+  - `POST /api/auth/logout` — unconditionally clears the active or expired session cookie (`Max-Age=0`).
+  - `GET /api/auth/session` — validates the `HMAC-SHA256` session cookie and returns `{ authenticated: true, user }` when signed in, or `{ authenticated: false, user: null }` otherwise.
   - `GET /api/user/preferences` & `PUT /api/user/preferences` — reads and persists per-user profile settings scoped strictly to the authenticated user ID.
 
 ---

@@ -131,7 +131,7 @@ export function createCorsMiddleware(): RequestHandler {
       }
       callback(null, false);
     },
-    methods: ['GET', 'POST', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Accept', 'Authorization'],
     credentials: false,
     optionsSuccessStatus: 204,

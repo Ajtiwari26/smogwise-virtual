@@ -11,8 +11,10 @@ import { requireAuth, type AuthenticatedRequest } from '../middleware/requireAut
 import {
   buildClearSessionCookie,
   buildSessionCookie,
+  extractSessionToken,
   signSessionToken,
   verifyCredentials,
+  verifySessionToken,
 } from '../services/authService.js';
 import { getUserPreferences, setUserPreferences } from '../services/preferencesStore.js';
 import { extractProfilePayload, toUserProfile } from './apiRouteHelpers.js';
@@ -53,12 +55,15 @@ function handleLogout(_req: Request, res: Response): void {
 
 function handleSession(req: Request, res: Response): void {
   res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
-  const authUser = getAuthUser(req);
-  if (authUser === undefined) {
-    res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required.' });
-    return;
+  const token = extractSessionToken(req.headers.cookie, req.headers.authorization);
+  if (token !== undefined) {
+    const user = verifySessionToken(token);
+    if (user !== null) {
+      res.status(200).json({ authenticated: true, user });
+      return;
+    }
   }
-  res.status(200).json({ authenticated: true, user: authUser });
+  res.status(200).json({ authenticated: false, user: null });
 }
 
 function handleGetPreferences(req: Request, res: Response): void {
@@ -93,8 +98,8 @@ export function createAuthRouter(authLimiter: RequestHandler): Router {
   const router = express.Router();
 
   router.post('/auth/login', authLimiter, handleLogin);
-  router.post('/auth/logout', requireAuth, handleLogout);
-  router.get('/auth/session', requireAuth, handleSession);
+  router.post('/auth/logout', handleLogout);
+  router.get('/auth/session', handleSession);
   router.get('/user/preferences', requireAuth, handleGetPreferences);
   router.put('/user/preferences', requireAuth, handlePutPreferences);
 

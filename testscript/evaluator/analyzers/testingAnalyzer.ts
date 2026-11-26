@@ -50,23 +50,40 @@ async function discoverAppTests(rootDir: string): Promise<readonly string[]> {
   return all;
 }
 
+function extractVitestReport(rawJson: string): VitestJsonReport | null {
+  try {
+    const parsed: unknown = JSON.parse(rawJson);
+    if (typeof parsed === 'object' && parsed !== null && 'numPassedTests' in parsed) {
+      return parsed as VitestJsonReport;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function parseVitestJson(raw: string): VitestJsonReport | null {
+  const whole = extractVitestReport(raw.trim());
+  if (whole !== null) return whole;
   const lines = raw.split('\n');
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = (lines[i] ?? '').trim();
-    if (!line.startsWith('{')) {
-      continue;
-    }
-    try {
-      const parsed: unknown = JSON.parse(line);
-      if (typeof parsed === 'object' && parsed !== null && 'numPassedTests' in parsed) {
-        return parsed as VitestJsonReport;
-      }
-    } catch {
-      continue;
-    }
+    if (!line.startsWith('{')) continue;
+    const report = extractVitestReport(line);
+    if (report !== null) return report;
   }
   return null;
+}
+
+async function readVitestReport(rootDir: string, stdout: string): Promise<VitestJsonReport | null> {
+  const fromStdout = parseVitestJson(stdout);
+  if (fromStdout !== null) return fromStdout;
+  try {
+    const fileRaw = await readFile(join(rootDir, '.vitest', 'json', 'output.json'), 'utf8');
+    return parseVitestJson(fileRaw);
+  } catch {
+    return null;
+  }
 }
 
 async function checkDomainCoverage(rootDir: string): Promise<readonly DeductionItem[]> {
@@ -144,7 +161,7 @@ export async function runTestingAnalyzer(rootDir: string): Promise<AnalyzerResul
   if (testFiles.length === 0) return buildEmptyTestResult();
   const vitestBin = join(rootDir, 'node_modules', '.bin', 'vitest');
   const res = await runShellCapture(vitestBin, ['run', '--reporter=json', '--coverage'], rootDir);
-  const report = parseVitestJson(res.stdout);
+  const report = await readVitestReport(rootDir, res.stdout);
   const failed = report?.numFailedTests ?? (res.code === 0 ? 0 : 1);
   if (failed > 0 || res.code !== 0) {
     return buildFailedTestResult(testFiles.length, failed);

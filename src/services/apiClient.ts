@@ -147,8 +147,8 @@ export async function loginSession(
 /** Checks active session cookie via GET /api/auth/session. */
 export async function fetchSession(
   signal?: AbortSignal,
-): Promise<{ readonly authenticated: boolean; readonly user: AuthUser }> {
-  return requestAuthJson<{ readonly authenticated: boolean; readonly user: AuthUser }>(
+): Promise<{ readonly authenticated: boolean; readonly user: AuthUser | null }> {
+  return requestAuthJson<{ readonly authenticated: boolean; readonly user: AuthUser | null }>(
     '/api/auth/session',
     {
       method: 'GET',

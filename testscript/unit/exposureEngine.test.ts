@@ -91,4 +91,28 @@ describe('exposureEngine intervention deltas & edge cases', () => {
     expect(metrics.doseReductionPercent).toBeGreaterThan(40);
     expect(metrics.optimalVentilationWindow).toBe('13:00 - 16:00');
   });
+
+  it('preserves monotonic IAQ invariance at mild outdoor PM2.5 = 37.4 ug/m3', () => {
+    const cases: readonly UserProfile[] = [
+      makeProfile({
+        cookingFuel: 'induction',
+        activeHacks: ['ventilation_window', 'n95_mask'],
+      }),
+      makeProfile({
+        cookingFuel: 'biomass_chulha',
+        activeHacks: ['window_sealing'],
+      }),
+    ];
+    for (const profile of cases) {
+      const metrics = computeExposureMetrics(profile, 37.4);
+      expect(Number.isFinite(metrics.optimizedIndoorPm25)).toBe(true);
+      expect(Number.isFinite(metrics.optimizedInhaledUgPerDay)).toBe(true);
+      expect(metrics.optimizedIndoorPm25).toBeGreaterThanOrEqual(0);
+      expect(metrics.optimizedInhaledUgPerDay).toBeGreaterThanOrEqual(0);
+      expect(metrics.optimizedIndoorPm25).toBeLessThanOrEqual(metrics.baselineIndoorPm25);
+      expect(metrics.optimizedInhaledUgPerDay).toBeLessThanOrEqual(
+        metrics.baselineInhaledUgPerDay,
+      );
+    }
+  });
 });

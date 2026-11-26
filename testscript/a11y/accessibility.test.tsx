@@ -84,10 +84,10 @@ describe('App authenticated session lifecycle & landmarks', () => {
         headers: { 'content-type': 'application/json' },
       });
 
-    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (url.includes('/api/auth/session')) {
-        return Promise.resolve(jsonRes({ error: 'UNAUTHENTICATED' }, 401));
+        return Promise.resolve(jsonRes({ authenticated: false, user: null }, 200));
       }
       if (url.includes('/api/auth/login')) {
         return Promise.resolve(jsonRes({ user: evalUser }));
@@ -105,6 +105,10 @@ describe('App authenticated session lifecycle & landmarks', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Delhi Family/i })).not.toBeDisabled();
     });
+    expect(container.querySelector('header')?.textContent ?? '').not.toContain(
+      'Offline City Preset',
+    );
+
     fireEvent.click(screen.getByRole('button', { name: /Delhi Family/i }));
 
     await waitFor(() => {
@@ -112,6 +116,15 @@ describe('App authenticated session lifecycle & landmarks', () => {
     });
     expect(container.querySelector('#impact')).not.toBeNull();
     expect(document.body.textContent ?? '').toContain('Direct Health & Emissions Impact');
+
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 1150);
+    });
+    const preferencePutCalls = fetchSpy.mock.calls.filter(([input, init]) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      return url.includes('/api/user/preferences') && init?.method === 'PUT';
+    });
+    expect(preferencePutCalls).toHaveLength(0);
 
     fireEvent.click(screen.getByRole('button', { name: /Sign Out/i }));
     await waitFor(() => {

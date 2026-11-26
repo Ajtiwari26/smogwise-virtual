@@ -30,10 +30,24 @@ import {
   SYNCED_CITATION_KEYS,
 } from './genaiPromptBuilders.js';
 
-const PRIMARY_MODEL = 'gemini-4-hydrogen';
-const FALLBACK_MODEL = 'gemini-3.5-flash-lite';
-const LLM_TIMEOUT_MS = 4500;
+const PRIMARY_MODEL = 'gemini-3.5-flash-lite';
+const FALLBACK_MODEL = 'gemini-4-hydrogen';
+const PRIMARY_TIMEOUT_MS = 4500;
+const FALLBACK_TIMEOUT_MS = 1800;
+const TOTAL_LLM_BUDGET_MS = 5500;
+const MIN_FALLBACK_BUDGET_MS = 800;
 const BRIEFING_CACHE_TTL_MS = 10 * 60 * 1000;
+
+let cachedClient: { readonly apiKey: string; readonly client: GoogleGenAI } | null = null;
+
+function getGenAiClient(apiKey: string): GoogleGenAI {
+  if (cachedClient !== null && cachedClient.apiKey === apiKey) {
+    return cachedClient.client;
+  }
+  const client = new GoogleGenAI({ apiKey });
+  cachedClient = { apiKey, client };
+  return client;
+}
 
 const BriefingJsonSchema = z.object({
   headline: z.string().trim().min(4).max(160),
@@ -106,12 +120,13 @@ async function callInteractionModel(
   model: string,
   systemInstruction: string,
   input: string,
+  timeoutMs: number,
 ): Promise<string | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<null>((resolve) => {
     timer = setTimeout(() => {
       resolve(null);
-    }, LLM_TIMEOUT_MS);
+    }, timeoutMs);
   });
   let apiPromise: Promise<string | null>;
   try {
@@ -122,7 +137,7 @@ async function callInteractionModel(
         input,
         store: false,
       },
-      { timeout_ms: LLM_TIMEOUT_MS },
+      { timeout_ms: timeoutMs },
     );
     apiPromise = Promise.resolve(rawCall)
       .then((res) => extractInteractionText(res))
@@ -148,12 +163,30 @@ async function queryGeminiWithFallback(
   systemInstruction: string,
   input: string,
 ): Promise<string | null> {
-  const client = new GoogleGenAI({ apiKey });
-  const primary = await callInteractionModel(client, PRIMARY_MODEL, systemInstruction, input);
+  const client = getGenAiClient(apiKey);
+  const deadline = Date.now() + TOTAL_LLM_BUDGET_MS;
+  const primary = await callInteractionModel(
+    client,
+    PRIMARY_MODEL,
+    systemInstruction,
+    input,
+    PRIMARY_TIMEOUT_MS,
+  );
   if (primary !== null) {
     return primary;
   }
-  return callInteractionModel(client, FALLBACK_MODEL, systemInstruction, input);
+  const remaining = deadline - Date.now();
+  if (remaining < MIN_FALLBACK_BUDGET_MS) {
+    return null;
+  }
+  const fallbackTimeout = Math.min(FALLBACK_TIMEOUT_MS, remaining);
+  return callInteractionModel(
+    client,
+    FALLBACK_MODEL,
+    systemInstruction,
+    input,
+    fallbackTimeout,
+  );
 }
 
 function ensureMinimumCitations(text: string): string {

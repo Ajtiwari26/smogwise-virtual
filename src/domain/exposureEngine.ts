@@ -68,18 +68,35 @@ function computeEffectiveCadr(hacks: readonly IAQHackId[], useOptimized: boolean
   return cr + hepa;
 }
 
-function computeHourlyAch(
+/**
+ * Computes steady-state single-zone indoor PM2.5 concentration (ug/m^3).
+ */
+export function computeSteadyStateIndoor(
+  penetration: number,
+  ach: number,
+  cOut: number,
+  eCook: number,
+  volume: number,
+  deposition: number,
+  cadr: number,
+): number {
+  const numerator = penetration * ach * cOut + eCook / volume;
+  const denominator = ach + deposition + cadr / volume;
+  return denominator > 0 ? Math.max(0, numerator / denominator) : cOut;
+}
+
+function buildOptimizedModes(
   hour: number,
   hacks: readonly IAQHackId[],
-  useOptimized: boolean,
-): number {
-  if (!useOptimized) {
-    return ACH_BASELINE;
+): readonly (readonly [number, number])[] {
+  const modes: [number, number][] = [[PENETRATION_UNSEALED, ACH_BASELINE]];
+  if (hasHack(hacks, 'window_sealing')) {
+    modes.push([PENETRATION_SEALED, ACH_SEALED]);
   }
   if (hasHack(hacks, 'ventilation_window') && OPTIMAL_VENTILATION_HOURS.includes(hour)) {
-    return ACH_VENTILATION;
+    modes.push([PENETRATION_UNSEALED, ACH_VENTILATION]);
   }
-  return hasHack(hacks, 'window_sealing') ? ACH_SEALED : ACH_BASELINE;
+  return modes;
 }
 
 function computeHourlyInhalationRate(
@@ -113,19 +130,45 @@ export function computeIndoorSeries(
 ): readonly number[] {
   const volume = clampRoomVolume(profile.roomVolumeM3);
   const hacks = profile.activeHacks;
-  const penetration =
-    useOptimized && hasHack(hacks, 'window_sealing') ? PENETRATION_SEALED : PENETRATION_UNSEALED;
-  const deposition =
-    useOptimized && hasHack(hacks, 'wet_mopping') ? DEPOSITION_WET_MOPPING : DEPOSITION_BASELINE;
-  const cadr = computeEffectiveCadr(hacks, useOptimized);
   const cookRate = COOKING_EMISSION_UG_PER_HOUR[profile.cookingFuel];
 
+  if (!useOptimized) {
+    return outdoorSeries.map((cOut, hour) => {
+      const eCook = COOKING_HOURS.includes(hour) ? cookRate : 0;
+      const conc = computeSteadyStateIndoor(
+        PENETRATION_UNSEALED,
+        ACH_BASELINE,
+        cOut,
+        eCook,
+        volume,
+        DEPOSITION_BASELINE,
+        0,
+      );
+      return round2(conc);
+    });
+  }
+
+  const deposition = hasHack(hacks, 'wet_mopping') ? DEPOSITION_WET_MOPPING : DEPOSITION_BASELINE;
+  const cadr = computeEffectiveCadr(hacks, true);
   return outdoorSeries.map((cOut, hour) => {
-    const ach = computeHourlyAch(hour, hacks, useOptimized);
     const eCook = COOKING_HOURS.includes(hour) ? cookRate : 0;
-    const numerator = penetration * ach * cOut + eCook / volume;
-    const denominator = ach + deposition + cadr / volume;
-    return round2(denominator > 0 ? numerator / denominator : cOut);
+    const modes = buildOptimizedModes(hour, hacks);
+    let minConc = Number.POSITIVE_INFINITY;
+    for (const [penetration, ach] of modes) {
+      const conc = computeSteadyStateIndoor(
+        penetration,
+        ach,
+        cOut,
+        eCook,
+        volume,
+        deposition,
+        cadr,
+      );
+      if (conc < minConc) {
+        minConc = conc;
+      }
+    }
+    return round2(minConc);
   });
 }
 
