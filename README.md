@@ -19,7 +19,7 @@ SmogWise Virtual uses a **Two-Tier Hybrid Architecture** so every number is audi
    - **Emissions, Budget Ranking & RWA Multiplier:** Computes $\text{CO}_2\text{e}$ (g/day), $\text{PM}_{2.5}$ (mg/day), and net monthly ₹ savings across commute and cooking choices, sorts IAQ interventions so ₹0–₹500 hacks surface first, and scales community impact linearly across participating RWA households.
 
 2. **Tier 2 — Grounded GenAI Advisory (`server/services/genaiService.ts`)**
-   - Uses `@google/genai` (Gemini 4 Interactions API) strictly on the server, grounded on Tier 1 citation tokens (`[CALC:DOSE_BEFORE]`, `[CALC:DOSE_AFTER]`, `[CALC:INDOOR_PM25]`, `[CALC:INDOOR_TARGET]`, `[CALC:CO2E_SAVED]`, `[CALC:INR_DELTA]`, `[SCI:PLANTS_VS_HEPA]`, `[AQ:SOURCE]`).
+   - Uses `@google/genai` Interactions API strictly on the server (`gemini-3.5-flash-lite` primary with a `4500ms` timeout and `gemini-4-hydrogen` `1800ms` fallback bounded inside `5500ms`), grounded on Tier 1 citation tokens (`[CALC:DOSE_BEFORE]`, `[CALC:DOSE_AFTER]`, `[CALC:INDOOR_PM25]`, `[CALC:INDOOR_TARGET]`, `[CALC:CO2E_SAVED]`, `[CALC:INR_DELTA]`, `[SCI:PLANTS_VS_HEPA]`, `[AQ:SOURCE]`).
    - Validates outputs with Zod and falls back to a deterministic bilingual synthesizer when `GEMINI_API_KEY` is absent or upstream calls fail.
 
 ---
@@ -50,6 +50,7 @@ SmogWise Virtual uses a **Two-Tier Hybrid Architecture** so every number is audi
 | `gurugram_rwa_180` | Gurugram RWA Coordinator (180 flats, 65% adoption, ₹4,500/mo) | Gurugram (DLF Phase 3) | English (`en`) | Linear RWA community $\text{CO}_2\text{e}$ & $\text{PM}_{2.5}$ scaling + copyable RWA notice |
 | `patna_clean_cooking` | Patna Chulha Transition (5 members, ₹900/mo, `biomass_chulha`) | Patna (Boring Road) | English (`en`) | Clean-cooking transition impact + budget-first low-cost hacks |
 | `delhi_office_commuter` | Delhi Office Commuter (`office_commuter` persona contrasting `delhi_young_family`) | Delhi (Anand Vihar) | English (`en`) | High-exposure daily commute dose reduction, N95 mask impact, and transit mode deltas |
+| `kanpur_outdoor_student` | Kanpur Outdoor Student (`outdoor_student`, `two_wheeler`, ₹1,200/mo, N95) | Kanpur (Nehru Nagar) | English (`en`) | `1.1x` commuting-student inhalation multiplier and afternoon sports AQI threshold gate |
 
 ---
 
@@ -60,7 +61,7 @@ SmogWise Virtual uses a **Two-Tier Hybrid Architecture** so every number is audi
 | **Tier 1: Deterministic Engine** | Diurnal inversion profile, indoor mass balance, inhaled dose, CPCB NAQI sub-indices, emissions, budget ranking, RWA scaling | Pure TypeScript in `src/domain/`; zero network/DOM calls; sub-millisecond client & server execution; emits `[CALC:*]`, `[SCI:*]`, and `[AQ:*]` ground-truth tokens |
 | **Edge & Location Guard** | Query validation, India bounding box (`6.5–37.5°N, 68.0–97.5°E`), SSRF allowlisting, `0.05°` cache quantization, rate limiting | `server/middleware/locationGuard.ts` & `server/services/openMeteoClient.ts` reject array parameters (`?q[]=`), URLs, and out-of-bounds coordinates with HTTP `400` |
 | **Prompt Flow & Isolation** | Bilingual advisory, what-if narrative, and grounded Q&A (`POST /api/plan`, `/api/what-if`, `/api/ai/ask`) | User text is NFKC-normalized, stripped of spoofed `[CALC:*]`/`[AQ:*]` tags, XML-escaped, and isolated inside `<user_query>` tags alongside read-only Tier 1 facts |
-| **Tier 2: Gemini 4 Advisory** | Natural-language synthesis grounded strictly in Tier 1 citation tokens | `@google/genai` server-only client (`server/services/genaiService.ts`) with Zod schema validation, output leak scanning, and deterministic bilingual fallback |
+| **Tier 2: Grounded GenAI** | Natural-language synthesis grounded strictly in Tier 1 citation tokens (`gemini-3.5-flash-lite` -> `gemini-4-hydrogen`) | `@google/genai` server-only client (`server/services/genaiService.ts`) with Zod schema validation, output leak scanning, and deterministic bilingual fallback |
 
 ---
 

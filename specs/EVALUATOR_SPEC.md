@@ -61,7 +61,7 @@ This evaluator enforces an **unbiased, brutally strict 0.00–100.00 decimal sco
 - **LRU Cache Effectiveness (2.00 pts):** Verifies SHA-256 key determinism, cache hit speedup ($\ge 5\times$ on repeated requests), and strict eviction at `maxEntries`.
 
 ### 3.4 `alignmentRuntimeAnalyzer.ts` (12.00 pts)
-- Executes 4 live persona scenarios through `/api/plan` and `/api/what-if` and verifies:
+- Executes 5 live persona scenarios (`young_family`, `sensitive_household`, `rwa_coordinator`, `office_commuter`, `outdoor_student`) through `/api/plan` and `/api/what-if` and verifies:
   - Present & physically plausible `before` vs `after` inhaled $\text{PM}_{2.5}$ ($\mu\text{g/day}$), indoor $\text{PM}_{2.5}$ ($\mu\text{g/m}^3$), $\text{CO}_2\text{e}$ avoided ($\text{g/day}$), and ₹ impact.
   - Strictly positive dose reduction when HEPA/Corsi-Rosenthal/N95/sealing hacks are enabled.
   - Presence of `[CALC:*]` and `[AQ:*]` verification tags in assistant output.

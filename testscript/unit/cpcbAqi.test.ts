@@ -72,8 +72,18 @@ describe('computeCpcbAqi deterministic CPCB NAQI calculator', () => {
 });
 
 describe('SAMPLE_SCENARIOS deterministic plan integration', () => {
-  it('includes 5 presets each yielding CALC:INDOOR_TARGET and SCI:PLANTS_VS_HEPA', () => {
-    expect(SAMPLE_SCENARIOS).toHaveLength(5);
+  it('includes 6 presets covering all 5 personas and yielding CALC:INDOOR_TARGET and SCI:PLANTS_VS_HEPA', () => {
+    expect(SAMPLE_SCENARIOS).toHaveLength(6);
+    const personas = new Set(SAMPLE_SCENARIOS.map((s) => s.profile.persona));
+    expect(personas).toEqual(
+      new Set([
+        'young_family',
+        'sensitive_household',
+        'rwa_coordinator',
+        'office_commuter',
+        'outdoor_student',
+      ]),
+    );
     for (const scenario of SAMPLE_SCENARIOS) {
       const report = computeFullPlan(scenario.profile);
       expect(report.citations['CALC:INDOOR_TARGET']).toBeDefined();
@@ -176,5 +186,46 @@ describe('persona differentiation, PM10 summary, RWA notice, and PM2.5-only live
     expect(report.livePm10).toBeUndefined();
     expect(report.liveNo2).toBeUndefined();
     expect(report.cpcbAqi).toBe(computeCpcbAqi(55).aqi);
+  });
+});
+
+describe('outdoor_student sports AQI threshold and commuting multiplier', () => {
+  it('switches outdoor_student afternoon sports advice on PM2.5 > 120 and applies 1.1x commute multiplier', () => {
+    const commutingStudent = computeFullPlan({
+      ...BASE_PROFILE,
+      persona: 'outdoor_student',
+      commuteMode: 'two_wheeler',
+    });
+    const wfhStudent = computeFullPlan({
+      ...BASE_PROFILE,
+      persona: 'outdoor_student',
+      commuteMode: 'wfh_walk',
+    });
+    expect(commutingStudent.report.exposure.baselineInhaledUgPerDay).toBeGreaterThan(
+      wfhStudent.report.exposure.baselineInhaledUgPerDay,
+    );
+
+    const lowEn = computeFullPlan(
+      { ...BASE_PROFILE, persona: 'outdoor_student', language: 'en' },
+      { pm25: 100 },
+    );
+    const highEn = computeFullPlan(
+      { ...BASE_PROFILE, persona: 'outdoor_student', language: 'en' },
+      { pm25: 250 },
+    );
+    const highHi = computeFullPlan(
+      { ...BASE_PROFILE, persona: 'outdoor_student', language: 'hi' },
+      { pm25: 250 },
+    );
+
+    expect(lowEn.routine.find((s) => s.id === 'afternoon_ventilation')?.description).toContain(
+      'keep afternoon outdoor sports brief',
+    );
+    expect(highEn.routine.find((s) => s.id === 'afternoon_ventilation')?.description).toContain(
+      'shift sports indoors',
+    );
+    expect(highHi.routine.find((s) => s.id === 'afternoon_ventilation')?.description).toContain(
+      'इनडोर खेल चुनें',
+    );
   });
 });
