@@ -46,15 +46,19 @@ function SuggestionListbox({
     >
       {results.map((item, idx) => {
         const selected = idx === activeIndex;
+        const optCls =
+          `${btnCls} ${selected ? 'bg-emerald-50' : 'bg-white'}`;
         return (
-          <li
-            key={item.id}
-            id={`${listboxId}-${item.id}`}
-            role="option"
-            aria-selected={selected}
-            className={selected ? 'bg-emerald-50' : 'bg-white'}
-          >
-            <button type="button" tabIndex={-1} onClick={() => onSelect(item)} className={btnCls}>
+          <li key={item.id} role="none">
+            <button
+              type="button"
+              id={`${listboxId}-${item.id}`}
+              role="option"
+              aria-selected={selected}
+              tabIndex={-1}
+              onClick={() => onSelect(item)}
+              className={optCls}
+            >
               <span className="font-medium">{item.name}</span>
               <span className="text-xs text-slate-600">{item.state}</span>
             </button>
@@ -93,8 +97,9 @@ function ComboboxInputField({
   const activeDescendantId =
     searchState.isOpen && activeOption !== undefined ? `${listboxId}-${activeOption.id}` : undefined;
   const inputCls =
-    'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm ' +
-    'text-slate-900 placeholder-slate-600 focus:border-emerald-700 focus:outline-none';
+    'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 ' +
+    'placeholder-slate-600 focus:border-emerald-700 focus:outline-none ' +
+    'focus-visible:ring-2 focus-visible:ring-teal-700';
 
   return (
     <div className="relative">

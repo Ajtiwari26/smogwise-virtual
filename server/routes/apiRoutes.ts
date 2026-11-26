@@ -101,7 +101,6 @@ async function handleAqiCoordinateLookup(data: ParsedAqiQuery, res: Response): P
 }
 
 async function handleAqiCityLookup(data: ParsedAqiQuery, res: Response): Promise<void> {
-  res.setHeader('Cache-Control', 'private, no-store');
   const cityInput = data.city ?? data.cityId ?? 'delhi_anand_vihar';
   const result = await fetchAirQualityForCity(cityInput);
   res.setHeader('Cache-Control', CITY_AQI_CACHE_CONTROL);
@@ -167,15 +166,37 @@ async function handlePlanBriefing(
   }
 }
 
+function isSameLocationTarget(
+  a: ReturnType<typeof toUserProfile>,
+  b: ReturnType<typeof toUserProfile>,
+): boolean {
+  if (a.customLocation !== undefined || b.customLocation !== undefined) {
+    return (
+      a.customLocation !== undefined &&
+      b.customLocation !== undefined &&
+      a.customLocation.lat === b.customLocation.lat &&
+      a.customLocation.lon === b.customLocation.lon
+    );
+  }
+  return a.cityId === b.cityId;
+}
+
 async function handleWhatIf(req: Request, res: Response, next: NextFunction): Promise<void> {
   res.setHeader('Cache-Control', 'private, no-store');
   try {
     const parsed = WhatIfSchema.parse(req.body);
     const baseline = toUserProfile(parsed.baseline);
     const alternative = toUserProfile(parsed.alternative);
-    const aqResult = await resolveProfileAq(baseline);
-    const comparison = compareWhatIf(baseline, alternative, aqResult.liveAq);
-    res.status(200).json(comparison);
+    if (isSameLocationTarget(baseline, alternative)) {
+      const aqResult = await resolveProfileAq(baseline);
+      res.status(200).json(compareWhatIf(baseline, alternative, aqResult.liveAq));
+      return;
+    }
+    const [baseAq, altAq] = await Promise.all([
+      resolveProfileAq(baseline),
+      resolveProfileAq(alternative),
+    ]);
+    res.status(200).json(compareWhatIf(baseline, alternative, baseAq.liveAq, altAq.liveAq));
   } catch (err) {
     if (err instanceof LiveAqUnavailableError) {
       sendLiveAqUnavailable(res, err);

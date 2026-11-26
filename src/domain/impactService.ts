@@ -235,9 +235,10 @@ export function compareWhatIf(
   baseline: UserProfile,
   alternative: UserProfile,
   liveAq?: LiveAqOverride,
+  alternativeLiveAq: LiveAqOverride | undefined = liveAq,
 ): WhatIfComparisonResult {
   const baselineReport = computeDeterministicReport(baseline, liveAq);
-  const alternativeReport = computeDeterministicReport(alternative, liveAq);
+  const alternativeReport = computeDeterministicReport(alternative, alternativeLiveAq);
   const baseRaw = computeRawDailyEmissions(baseline);
   const altRaw = computeRawDailyEmissions(alternative);
 

@@ -116,6 +116,9 @@ describe('App authenticated session lifecycle & landmarks', () => {
     });
     expect(container.querySelector('main#main-content')?.getAttribute('tabindex')).toBe('-1');
     expect(container.querySelector('#impact')).not.toBeNull();
+    expect(container.querySelector('table caption')).not.toBeNull();
+    expect(container.querySelector('fieldset legend')).not.toBeNull();
+    expect(container.querySelector('[role="combobox"]')).not.toBeNull();
     expect(document.body.textContent ?? '').toContain('Direct Health & Emissions Impact');
 
     await new Promise<void>((resolve) => {

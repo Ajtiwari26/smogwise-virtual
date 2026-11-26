@@ -198,33 +198,65 @@ const DiurnalSvgChart: React.FC<DiurnalChartProps> = React.memo(function Diurnal
   );
 });
 
+const METRIC_TEXT = {
+  en: {
+    perDay: 'day',
+    perMo: 'mo',
+    before: 'Before',
+    ventilate: 'Ventilate',
+    doseTitle: 'Inhaled PM2.5 Dose',
+    indoorTitle: 'Indoor PM2.5',
+    co2eTitle: 'CO2e Avoided',
+    savingsTitle: 'Monthly Net Savings',
+  },
+  hi: {
+    perDay: 'दिन',
+    perMo: 'माह',
+    before: 'पहले',
+    ventilate: 'वेंटिलेशन',
+    doseTitle: 'दैनिक PM2.5 खुराक',
+    indoorTitle: 'इनडोर PM2.5',
+    co2eTitle: 'CO2e बचत',
+    savingsTitle: 'मासिक शुद्ध बचत',
+  },
+} as const;
+
+function buildImpactCards(
+  report: ImpactDashboardProps['report'],
+  language: ImpactDashboardProps['language'],
+): readonly { readonly title: string; readonly value: string; readonly sub: string }[] {
+  const t = METRIC_TEXT[language];
+  const { exposure, emissions } = report;
+  return [
+    {
+      title: t.doseTitle,
+      value: `${String(exposure.optimizedInhaledUgPerDay)} ug/${t.perDay}`,
+      sub: `${String(exposure.baselineInhaledUgPerDay)} -> -${String(exposure.doseReductionPercent)}%`,
+    },
+    {
+      title: t.indoorTitle,
+      value: `${String(exposure.optimizedIndoorPm25)} ug/m3`,
+      sub: `${t.before}: ${String(exposure.baselineIndoorPm25)} ug/m3`,
+    },
+    {
+      title: t.co2eTitle,
+      value: `${String(emissions.co2eAvoidedGramsPerDay)} g/${t.perDay}`,
+      sub: `PM2.5: ${String(emissions.pm25AvoidedMgPerDay)} mg/${t.perDay}`,
+    },
+    {
+      title: t.savingsTitle,
+      value: `₹${String(emissions.monthlyNetSavingsInr)}/${t.perMo}`,
+      sub: `${t.ventilate}: ${exposure.optimalVentilationWindow}`,
+    },
+  ];
+}
+
 /** Displays Before vs After exposure, indoor PM2.5, CO2e avoided, INR savings, and 24h chart. */
 export const ImpactDashboard: React.FC<ImpactDashboardProps> = React.memo(
   function ImpactDashboard({ report, language }) {
     const isHi = language === 'hi';
-    const { exposure, emissions, citations } = report;
-    const cards = [
-      {
-        title: isHi ? 'दैनिक PM2.5 खुराक' : 'Inhaled PM2.5 Dose',
-        value: `${String(exposure.optimizedInhaledUgPerDay)} ug/day`,
-        sub: `${String(exposure.baselineInhaledUgPerDay)} -> -${String(exposure.doseReductionPercent)}%`,
-      },
-      {
-        title: isHi ? 'इनडोर PM2.5' : 'Indoor PM2.5',
-        value: `${String(exposure.optimizedIndoorPm25)} ug/m3`,
-        sub: `${isHi ? 'पहले' : 'Before'}: ${String(exposure.baselineIndoorPm25)} ug/m3`,
-      },
-      {
-        title: isHi ? 'CO2e बचत' : 'CO2e Avoided',
-        value: `${String(emissions.co2eAvoidedGramsPerDay)} g/day`,
-        sub: `PM2.5: ${String(emissions.pm25AvoidedMgPerDay)} mg/day`,
-      },
-      {
-        title: isHi ? 'मासिक शुद्ध बचत' : 'Monthly Net Savings',
-        value: `₹${String(emissions.monthlyNetSavingsInr)}/mo`,
-        sub: `${isHi ? 'वेंटिलेशन' : 'Ventilate'}: ${exposure.optimalVentilationWindow}`,
-      },
-    ];
+    const { exposure, citations } = report;
+    const cards = buildImpactCards(report, language);
 
     return (
       <section

@@ -98,6 +98,19 @@ describe('POST /api/plan, /api/what-if, and /api/ai/ask', () => {
     expect(res.status).toBe(200);
     expect(res.body.delta.co2eAvoidedGramsPerDay).toBeGreaterThan(0);
     expect(res.body.citations['CALC:CO2E_SAVED']).toBeDefined();
+
+    const multiCity = await request(createApp())
+      .post('/api/what-if')
+      .send({
+        baseline: { ...BASE_PROFILE, cityId: 'delhi_anand_vihar' },
+        alternative: { ...BASE_PROFILE, cityId: 'mumbai_bandra', commuteMode: 'metro_bus' },
+      });
+    expect(multiCity.status).toBe(200);
+    expect(multiCity.body.baseline.city.id).toBe('delhi_anand_vihar');
+    expect(multiCity.body.alternative.city.id).toBe('mumbai_bandra');
+    expect(multiCity.body.alternative.city.baselinePm25).not.toBe(
+      multiCity.body.baseline.city.baselinePm25,
+    );
   });
 
   it('returns grounded fallback response on /api/ai/ask', async () => {

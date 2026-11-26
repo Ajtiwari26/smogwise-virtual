@@ -9,6 +9,7 @@ import { rejectPrototypePollutionAndDepth } from './middleware/bodyGuard.js';
 import {
   centralizedErrorHandler,
   createCorsMiddleware,
+  createCsrfOriginGuard,
   createHelmetMiddleware,
   createJsonBodyParser,
   createPermissionsPolicyMiddleware,
@@ -29,6 +30,7 @@ export function createApp(): Express {
 
   app.use(createHelmetMiddleware());
   app.use(createCorsMiddleware());
+  app.use(createCsrfOriginGuard());
   app.use(createJsonBodyParser());
   app.use(createPermissionsPolicyMiddleware());
   app.use(rejectPrototypePollutionAndDepth);

@@ -95,6 +95,11 @@ export interface AqSyncHandlers {
 export function useDebouncedAqSync(profile: UserProfile, handlers: AqSyncHandlers): void {
   const { generationRef, setLiveAq, setAqMeta, setAqiError } = handlers;
   const { cityId, customLocation, language } = profile;
+  const languageRef = useRef(language);
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
+
   useEffect(() => {
     const controller = new AbortController();
     const gen = ++generationRef.current;
@@ -117,14 +122,14 @@ export function useDebouncedAqSync(profile: UserProfile, handlers: AqSyncHandler
         })
         .catch((err: unknown) => {
           if (gen !== generationRef.current || controller.signal.aborted) return;
-          setAqiError(formatAqErrorMessage(err, language));
+          setAqiError(formatAqErrorMessage(err, languageRef.current));
         });
     }, DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [cityId, customLocation, language, generationRef, setLiveAq, setAqMeta, setAqiError]);
+  }, [cityId, customLocation, generationRef, setLiveAq, setAqMeta, setAqiError]);
 }
 
 export interface PlanSyncHandlers {

@@ -51,6 +51,28 @@ describe('HTTP security headers, CORS, Zod, payload limits & SSRF', () => {
     );
   });
 
+  it('blocks cross-site POST/PUT mutations via Origin and Sec-Fetch-Site headers', async () => {
+    const app = createApp();
+    const foreignLogout = await request(app)
+      .post('/api/auth/logout')
+      .set('Origin', 'https://evil-attacker.example');
+    expect(foreignLogout.status).toBe(403);
+    expect(foreignLogout.body.error).toBe('FORBIDDEN_ORIGIN');
+
+    const crossSitePrefs = await request(app)
+      .put('/api/user/preferences')
+      .set('Sec-Fetch-Site', 'cross-site')
+      .send({ profile: VALID_PROFILE });
+    expect(crossSitePrefs.status).toBe(403);
+    expect(crossSitePrefs.body.error).toBe('FORBIDDEN_CROSS_SITE');
+
+    const sameSiteLogout = await request(app)
+      .post('/api/auth/logout')
+      .set('Origin', 'http://localhost:5173')
+      .set('Sec-Fetch-Site', 'same-origin');
+    expect(sameSiteLogout.status).toBe(200);
+  });
+
   it('returns 400 on malformed Zod input without stack trace leak', async () => {
     const res = await request(createApp())
       .post('/api/plan')

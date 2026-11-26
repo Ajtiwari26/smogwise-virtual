@@ -140,6 +140,54 @@ export function createCorsMiddleware(): RequestHandler {
   return cors(options);
 }
 
+const SAFE_HTTP_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+function evaluateCrossSiteMutation(
+  fetchSite: string | string[] | undefined,
+  origin: string | string[] | undefined,
+  allowedOrigins: ReadonlySet<string>,
+): { readonly blocked: boolean; readonly code: string; readonly message: string } {
+  if (typeof fetchSite === 'string' && fetchSite.toLowerCase() === 'cross-site') {
+    return {
+      blocked: true,
+      code: 'FORBIDDEN_CROSS_SITE',
+      message: 'Cross-site mutation rejected.',
+    };
+  }
+  if (typeof origin === 'string' && !allowedOrigins.has(origin)) {
+    return {
+      blocked: true,
+      code: 'FORBIDDEN_ORIGIN',
+      message: 'Untrusted request origin.',
+    };
+  }
+  return { blocked: false, code: '', message: '' };
+}
+
+/**
+ * Rejects cross-site browser mutations via Fetch Metadata and strict Origin checks.
+ */
+export function createCsrfOriginGuard(): RequestHandler {
+  const allowedOrigins = buildAllowedOrigins();
+  return (req, res, next) => {
+    if (SAFE_HTTP_METHODS.has(req.method)) {
+      next();
+      return;
+    }
+    const verdict = evaluateCrossSiteMutation(
+      req.headers['sec-fetch-site'],
+      req.headers.origin,
+      allowedOrigins,
+    );
+    if (verdict.blocked) {
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.status(403).json({ error: verdict.code, message: verdict.message });
+      return;
+    }
+    next();
+  };
+}
+
 /**
  * Creates JSON body parser capped at 16KB to prevent payload abuse.
  */
@@ -227,6 +275,9 @@ function isMalformedJsonError(err: unknown): boolean {
  * Centralized JSON error handler that never exposes stack traces or internal paths.
  */
 export const centralizedErrorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+  if (!res.headersSent) {
+    res.setHeader('Cache-Control', 'private, no-store');
+  }
   if (isPayloadTooLarge(err)) {
     res.status(413).json({ error: 'Request payload exceeds the 16KB limit.' });
     return;
