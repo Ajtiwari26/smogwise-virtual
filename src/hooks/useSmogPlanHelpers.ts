@@ -2,7 +2,7 @@
  * Pure helpers, constants, and race-safe debounced sync effects for useSmogPlan.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type {
   CustomLocation,
@@ -23,10 +23,17 @@ import {
   postPlanBriefing,
 } from '../services/apiClient.js';
 
+/** Debounce interval (ms) for /api/aqi and /api/plan synchronization. */
 export const DEBOUNCE_MS = 280;
+/** Debounce interval (ms) for /api/plan/briefing GenAI synthesis. */
 export const BRIEFING_DEBOUNCE_MS = 450;
+/** Default RWA flat count before user adjustment. */
 export const DEFAULT_RWA_HOUSEHOLDS = 120;
+/** Default RWA adoption rate (45%) before user adjustment. */
 export const DEFAULT_RWA_ADOPTION_RATE = 0.45;
+
+/** Structured air-quality sync error code translated dynamically at render time. */
+export type AqErrorCode = 'LIVE_AQ_UNAVAILABLE' | 'AQ_SYNC_FAILED';
 
 /** Live or fallback air-quality metadata surfaced to UI banners. */
 export interface AqMeta {
@@ -38,8 +45,7 @@ export interface AqMeta {
   readonly fallbackDistanceKm?: number;
 }
 
-/** Normalizes GET /api/aqi metadata into banner state. */
-export function buildAqMeta(res: AqiApiResponse): AqMeta {
+function buildAqMeta(res: AqiApiResponse): AqMeta {
   return {
     dataSource: res.dataSource,
     cpcbAqi: res.cpcbAqi,
@@ -54,10 +60,23 @@ export function buildAqMeta(res: AqiApiResponse): AqMeta {
   };
 }
 
-/** Formats localized EN/HI air-quality sync error banners. */
-export function formatAqErrorMessage(err: unknown, lang: LanguageCode): string {
-  const isHindi = lang === 'hi';
+function resolveAqErrorCode(err: unknown): AqErrorCode {
   if (err instanceof ApiError && err.code === 'LIVE_AQ_UNAVAILABLE') {
+    return 'LIVE_AQ_UNAVAILABLE';
+  }
+  return 'AQ_SYNC_FAILED';
+}
+
+/** Formats a structured AQ error code into localized EN/HI banner text. */
+export function formatAqErrorCode(
+  code: AqErrorCode | undefined,
+  lang: LanguageCode,
+): string | undefined {
+  if (code === undefined) {
+    return undefined;
+  }
+  const isHindi = lang === 'hi';
+  if (code === 'LIVE_AQ_UNAVAILABLE') {
     return isHindi
       ? 'इस स्थान के लिए लाइव वायु गुणवत्ता डेटा अस्थायी रूप से उपलब्ध नहीं है। प्रमुख शहर चुनें या पुनः प्रयास करें।'
       : 'Live air quality data is temporarily unavailable for this location. Select a major city preset or retry.';
@@ -79,30 +98,41 @@ export function buildCustomLocation(item: LocationSearchItem): CustomLocation {
 
 /** Returns a copy of profile targeting a preset city with customLocation omitted. */
 export function stripCustomLocation(prev: UserProfile, cityId: string): UserProfile {
-  const next: UserProfile = { ...prev, cityId };
-  delete (next as { customLocation?: CustomLocation }).customLocation;
-  return next;
+  return {
+    persona: prev.persona,
+    cityId,
+    language: prev.language,
+    householdSize: prev.householdSize,
+    hasVulnerableMember: prev.hasVulnerableMember,
+    monthlyBudgetInr: prev.monthlyBudgetInr,
+    roomVolumeM3: prev.roomVolumeM3,
+    commuteMode: prev.commuteMode,
+    commuteDistanceKm: prev.commuteDistanceKm,
+    cookingFuel: prev.cookingFuel,
+    activeHacks: prev.activeHacks,
+    ...(prev.rwaHouseholds !== undefined ? { rwaHouseholds: prev.rwaHouseholds } : {}),
+    ...(prev.rwaAdoptionRate !== undefined ? { rwaAdoptionRate: prev.rwaAdoptionRate } : {}),
+  };
 }
 
+/** Handlers passed to useDebouncedAqSync. */
 export interface AqSyncHandlers {
   readonly generationRef: MutableRefObject<number>;
   readonly setLiveAq: Dispatch<SetStateAction<LiveAqOverride | undefined>>;
   readonly setAqMeta: Dispatch<SetStateAction<AqMeta | undefined>>;
-  readonly setAqiError: Dispatch<SetStateAction<string | undefined>>;
+  readonly setAqiErrorCode: Dispatch<SetStateAction<AqErrorCode | undefined>>;
+  readonly setIsAqSyncing: Dispatch<SetStateAction<boolean>>;
 }
 
 /** Debounced race-safe GET /api/aqi synchronization. */
 export function useDebouncedAqSync(profile: UserProfile, handlers: AqSyncHandlers): void {
-  const { generationRef, setLiveAq, setAqMeta, setAqiError } = handlers;
-  const { cityId, customLocation, language } = profile;
-  const languageRef = useRef(language);
-  useEffect(() => {
-    languageRef.current = language;
-  }, [language]);
+  const { generationRef, setLiveAq, setAqMeta, setAqiErrorCode, setIsAqSyncing } = handlers;
+  const { cityId, customLocation } = profile;
 
   useEffect(() => {
     const controller = new AbortController();
     const gen = ++generationRef.current;
+    setIsAqSyncing(true);
     const timer = setTimeout(() => {
       const req = customLocation !== undefined
         ? fetchAqiByCoords(
@@ -115,50 +145,57 @@ export function useDebouncedAqSync(profile: UserProfile, handlers: AqSyncHandler
         : fetchAqi(cityId, controller.signal);
       void req
         .then((res) => {
-          if (gen !== generationRef.current) return;
+          if (gen !== generationRef.current || controller.signal.aborted) return;
           setLiveAq(res.liveAq);
           setAqMeta(buildAqMeta(res));
-          setAqiError(undefined);
+          setAqiErrorCode(undefined);
+          setIsAqSyncing(false);
         })
         .catch((err: unknown) => {
           if (gen !== generationRef.current || controller.signal.aborted) return;
-          setAqiError(formatAqErrorMessage(err, languageRef.current));
+          setAqiErrorCode(resolveAqErrorCode(err));
+          setIsAqSyncing(false);
         });
     }, DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [cityId, customLocation, generationRef, setLiveAq, setAqMeta, setAqiError]);
+  }, [
+    cityId,
+    customLocation,
+    generationRef,
+    setLiveAq,
+    setAqMeta,
+    setAqiErrorCode,
+    setIsAqSyncing,
+  ]);
 }
 
+/** Handlers passed to useDebouncedPlanSync. */
 export interface PlanSyncHandlers {
   readonly generationRef: MutableRefObject<number>;
   readonly setSyncedPlan: Dispatch<SetStateAction<FullPlanOutput | undefined>>;
-  readonly setIsSyncing: Dispatch<SetStateAction<boolean>>;
-  readonly setAqiError: Dispatch<SetStateAction<string | undefined>>;
+  readonly setAqiErrorCode: Dispatch<SetStateAction<AqErrorCode | undefined>>;
 }
 
 /** Debounced race-safe POST /api/plan synchronization. */
 export function useDebouncedPlanSync(profile: UserProfile, handlers: PlanSyncHandlers): void {
-  const { generationRef, setSyncedPlan, setIsSyncing, setAqiError } = handlers;
+  const { generationRef, setSyncedPlan, setAqiErrorCode } = handlers;
   useEffect(() => {
     const controller = new AbortController();
     const gen = ++generationRef.current;
-    setIsSyncing(true);
     const timer = setTimeout(() => {
       void postPlan(profile, controller.signal)
         .then((res) => {
-          if (gen !== generationRef.current) return;
+          if (gen !== generationRef.current || controller.signal.aborted) return;
           setSyncedPlan(res);
-          setAqiError(undefined);
-          setIsSyncing(false);
+          setAqiErrorCode(undefined);
         })
         .catch((err: unknown) => {
           if (gen !== generationRef.current || controller.signal.aborted) return;
-          setIsSyncing(false);
           if (err instanceof ApiError && err.code === 'LIVE_AQ_UNAVAILABLE') {
-            setAqiError(formatAqErrorMessage(err, profile.language));
+            setAqiErrorCode('LIVE_AQ_UNAVAILABLE');
           }
         });
     }, DEBOUNCE_MS);
@@ -166,19 +203,21 @@ export function useDebouncedPlanSync(profile: UserProfile, handlers: PlanSyncHan
       clearTimeout(timer);
       controller.abort();
     };
-  }, [profile, generationRef, setSyncedPlan, setIsSyncing, setAqiError]);
+  }, [profile, generationRef, setSyncedPlan, setAqiErrorCode]);
 }
 
+/** Handlers passed to useDebouncedBriefingSync. */
 export interface BriefingSyncHandlers {
   readonly generationRef: MutableRefObject<number>;
   readonly setBriefing: Dispatch<SetStateAction<PlanBriefingApiResponse | undefined>>;
   readonly setIsBriefingLoading: Dispatch<SetStateAction<boolean>>;
 }
 
-function serializeBriefingKey(profile: UserProfile): string {
-  return JSON.stringify(profile, (key, value: unknown) =>
-    key === 'rwaHouseholds' || key === 'rwaAdoptionRate' ? undefined : value,
-  );
+function buildHouseholdBriefingProfile(profile: UserProfile): UserProfile {
+  const householdProfile = { ...profile };
+  delete householdProfile.rwaHouseholds;
+  delete householdProfile.rwaAdoptionRate;
+  return householdProfile;
 }
 
 /** Debounced 450ms race-safe POST /api/plan/briefing sync with graceful fallback. */
@@ -187,11 +226,12 @@ export function useDebouncedBriefingSync(
   handlers: BriefingSyncHandlers,
 ): void {
   const { generationRef, setBriefing, setIsBriefingLoading } = handlers;
-  const profileRef = useRef<UserProfile>(profile);
+  const briefingProfile = useMemo(() => buildHouseholdBriefingProfile(profile), [profile]);
+  const profileRef = useRef(briefingProfile);
   useEffect(() => {
-    profileRef.current = profile;
-  });
-  const briefingKey = serializeBriefingKey(profile);
+    profileRef.current = briefingProfile;
+  }, [briefingProfile]);
+  const briefingKey = JSON.stringify(briefingProfile);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -200,11 +240,12 @@ export function useDebouncedBriefingSync(
     const timer = setTimeout(() => {
       void postPlanBriefing(profileRef.current, controller.signal)
         .then((res) => {
-          if (gen !== generationRef.current) return;
+          if (gen !== generationRef.current || controller.signal.aborted) return;
           setBriefing(res);
           setIsBriefingLoading(false);
         })
-        .catch(() => {
+        .catch((err: unknown) => {
+          void err;
           if (gen !== generationRef.current || controller.signal.aborted) return;
           setIsBriefingLoading(false);
         });

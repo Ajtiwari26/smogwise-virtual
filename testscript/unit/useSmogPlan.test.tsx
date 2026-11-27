@@ -216,7 +216,12 @@ describe('useSmogPlan location selection and preset switching', () => {
         lon: 77.6408,
       });
     });
-    expect(result.current.profile.customLocation).toBeDefined();
+    expect(result.current.profile.customLocation).toEqual({
+      name: 'Indiranagar',
+      state: 'Karnataka',
+      lat: 12.9784,
+      lon: 77.6408,
+    });
 
     act(() => {
       result.current.selectPresetCity('mumbai_bandra');
@@ -273,12 +278,20 @@ describe('useSmogPlan RWA and briefing hydration', () => {
       await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS);
     });
     expect(result.current.briefing).toEqual(mockBriefingResponse);
+    const initialRequest = mockedPostPlanBriefing.mock.calls.at(-1)?.[0];
+    expect(initialRequest).toMatchObject({ cityId: DEFAULT_PROFILE.cityId });
+    expect(initialRequest).not.toHaveProperty('rwaHouseholds');
+    expect(initialRequest).not.toHaveProperty('rwaAdoptionRate');
 
     act(() => {
       result.current.updateRwaHouseholds(250);
       result.current.updateRwaAdoptionRate(0.75);
     });
 
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS);
+    });
+    expect(mockedPostPlanBriefing).toHaveBeenCalledTimes(1);
     expect(result.current.briefing).toEqual(mockBriefingResponse);
   });
 });
@@ -286,6 +299,30 @@ describe('useSmogPlan RWA and briefing hydration', () => {
 describe('useSmogPlan error states', () => {
   beforeEach(setupDefaultMocks);
   afterEach(cleanupTestState);
+
+  it('attributes the local plan to the nearest preset after distant custom AQ returns 503', async () => {
+    vi.useFakeTimers();
+    const unavailable = new apiClient.ApiError('Unavailable', 503, 'LIVE_AQ_UNAVAILABLE');
+    mockedFetchAqiByCoords.mockRejectedValue(unavailable);
+    const { result } = renderHook(() => useSmogPlan());
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); });
+    expect(result.current.liveAq).toEqual(mockLiveAq);
+    mockedPostPlan.mockRejectedValue(unavailable);
+    act(() => result.current.updateProfile({
+      customLocation: { name: 'Udaipur', state: 'Rajasthan', lat: 24.5854, lon: 73.7125 },
+    }));
+    expect(result.current.liveAq).toBeUndefined();
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); });
+
+    const jaipur = resolveCityPreset('jaipur');
+    const { report } = result.current.plan;
+    expect(result.current.aqiError).toContain('temporarily unavailable');
+    expect(result.current.aqMeta).toBeUndefined();
+    expect(report.city.name).toBe('Udaipur, Rajasthan');
+    expect(report.city.baselinePm25).toBe(jaipur.baselinePm25);
+    expect(report.fallbackStationName).toBe(jaipur.name);
+    expect(report.citations['AQ:SOURCE']).toContain(`Nearest station proxy: ${jaipur.name}`);
+  });
 
   it('surfaces localized 503 LIVE_AQ_UNAVAILABLE error banner in both en and hi', async () => {
     vi.useFakeTimers();
@@ -318,5 +355,35 @@ describe('useSmogPlan error states', () => {
     expect(result.current.aqiError).toBe(
       'इस स्थान के लिए लाइव वायु गुणवत्ता डेटा अस्थायी रूप से उपलब्ध नहीं है। प्रमुख शहर चुनें या पुनः प्रयास करें।',
     );
+  });
+
+  it('re-localizes active AQI error immediately when toggling language without re-fetching and keeps isSyncing scoped to AQ', async () => {
+    vi.useFakeTimers();
+    const unavailableErr = new apiClient.ApiError(
+      'Service unavailable',
+      503,
+      'LIVE_AQ_UNAVAILABLE',
+    );
+    mockedFetchAqi.mockRejectedValue(unavailableErr);
+    mockedPostPlan.mockRejectedValue(unavailableErr);
+
+    const { result } = renderHook(() => useSmogPlan());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    });
+    expect(result.current.aqiError).toContain('temporarily unavailable');
+    expect(result.current.isSyncing).toBe(false);
+
+    // Switching language should immediately re-localize the error banner from aqiErrorCode
+    act(() => {
+      result.current.setLanguage('hi');
+    });
+    expect(result.current.aqiError).toContain('अस्थायी रूप से उपलब्ध नहीं है');
+
+    // Updating RWA sliders must not set isSyncing to true
+    act(() => {
+      result.current.updateRwaHouseholds(220);
+    });
+    expect(result.current.isSyncing).toBe(false);
   });
 });

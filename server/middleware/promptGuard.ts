@@ -1,102 +1,12 @@
 /**
- * Zod v4 request schemas, prompt-injection/XSS detector, XML wrapper,
- * and output secret scrubber for SmogWise Virtual API.
+ * Prompt-injection/XSS/SQLi detector, XML wrapper, and output secret scrubber.
  */
 
-import { z } from 'zod';
-import {
-  CustomLocationSchema,
-  escapeXml,
-  isUnsafeCityInput,
-  stripZeroWidthAndBidi,
-} from './locationGuard.js';
-
-export * from './locationGuard.js';
-
-const PERSONAS = [
-  'young_family',
-  'sensitive_household',
-  'rwa_coordinator',
-  'office_commuter',
-  'outdoor_student',
-] as const;
-const LANGUAGES = ['en', 'hi'] as const;
-const COMMUTE_MODES = [
-  'petrol_car',
-  'two_wheeler',
-  'metro_bus',
-  'carpool',
-  'wfh_walk',
-] as const;
-const COOKING_FUELS = ['lpg', 'induction', 'biomass_chulha'] as const;
-const IAQ_HACKS = [
-  'window_sealing',
-  'wet_mopping',
-  'ventilation_window',
-  'corsi_rosenthal_box',
-  'hepa_purifier',
-  'n95_mask',
-] as const;
-
-/** Zod schema validating a household UserProfile payload. */
-export const UserProfileSchema = z.object({
-  persona: z.enum(PERSONAS),
-  cityId: z
-    .string()
-    .trim()
-    .min(2)
-    .max(64)
-    .refine((val) => !isUnsafeCityInput(val), 'Unsafe city identifier'),
-  language: z.enum(LANGUAGES),
-  householdSize: z.number().int().min(1).max(20),
-  hasVulnerableMember: z.boolean(),
-  monthlyBudgetInr: z.number().min(0).max(500_000),
-  roomVolumeM3: z.number().min(12).max(500),
-  commuteMode: z.enum(COMMUTE_MODES),
-  commuteDistanceKm: z.number().min(0).max(200),
-  cookingFuel: z.enum(COOKING_FUELS),
-  activeHacks: z.array(z.enum(IAQ_HACKS)).max(10),
-  rwaHouseholds: z.number().int().min(1).max(5000).optional(),
-  rwaAdoptionRate: z.number().min(0).max(1).optional(),
-  customLocation: CustomLocationSchema.optional(),
-});
-
-/** Zod schema validating POST /api/auth/login payload. */
-export const LoginSchema = z
-  .object({
-    email: z.string().trim().email().max(120),
-    password: z.string().min(6).max(128),
-  })
-  .strict();
-
-/** Zod schema validating POST /api/what-if payload. */
-export const WhatIfSchema = z.object({
-  baseline: UserProfileSchema,
-  alternative: UserProfileSchema,
-});
-
-/** Zod schema validating POST /api/ai/ask payload. */
-export const AiAskSchema = z
-  .object({
-    question: z.string().trim().min(1).max(1000).optional(),
-    query: z.string().trim().min(1).max(1000).optional(),
-    city: z
-      .string()
-      .trim()
-      .min(2)
-      .max(64)
-      .refine((val) => !isUnsafeCityInput(val), 'Unsafe city identifier')
-      .optional(),
-    language: z.enum(LANGUAGES).optional(),
-    profile: UserProfileSchema.optional(),
-  })
-  .refine((data) => Boolean(data.question ?? data.query), {
-    message: 'Either question or query must be provided.',
-    path: ['question'],
-  });
+import { getEnvConfig } from '../config/env.js';
+import { escapeXml, stripZeroWidthAndBidi } from './locationGuard.js';
 
 /** Result of inspecting and sanitizing a user prompt. */
-export interface PromptInspectionResult {
+interface PromptInspectionResult {
   readonly sanitizedText: string;
   readonly guardTriggered: boolean;
   readonly reasons: readonly string[];
@@ -120,7 +30,11 @@ const DIRECT_RULES: readonly PatternRule[] = [
   },
   {
     reason: 'ssrf_or_exfil',
-    regex: /169\.254\.169\.254|exfiltrate|session\s+tokens/i,
+    regex: new RegExp(
+      '169\\.254\\.169\\.254|exfiltrate|session\\s+tokens|'
+        + 'document\\.cookie|localstorage|sessionstorage',
+      'i',
+    ),
   },
   {
     reason: 'xml_delimiter_breakout',
@@ -137,11 +51,15 @@ const DIRECT_RULES: readonly PatternRule[] = [
   },
   {
     reason: 'xss_payload',
-    regex: /<script|onerror\s*=|onload\s*=|<img\b|javascript:/i,
+    regex: new RegExp(
+      '<script|<svg|<iframe|<object|onerror\\s*=|onload\\s*=|onfocus\\s*=|onmouseover\\s*='
+        + '|<img\\b|javascript:',
+      'i',
+    ),
   },
   {
     reason: 'secret_probe',
-    regex: /gemini_api_key|openai_api_key|process\.env|env\s+vars/i,
+    regex: /gemini_api_key|openai_api_key|auth_secret|process\.env|env\s+vars/i,
   },
   {
     reason: 'sql_injection',
@@ -154,20 +72,28 @@ const DIRECT_RULES: readonly PatternRule[] = [
 ];
 
 const BASE64_TOKEN_RE =
-  /(?:^|[^A-Za-z0-9+/_-])([A-Za-z0-9+/_-]{16,}={0,2})(?:$|[^A-Za-z0-9+/_=-])/g;
+  /(?:^|[^A-Za-z0-9+/_-])([A-Za-z0-9+/_-]{12,}={0,2})(?:$|[^A-Za-z0-9+/_=-])/g;
 const BASE64_THREAT_RE = new RegExp(
-  'ignore|rules|secret|system|prompt|api_key|password|leak|' +
-    'prednisone|dosage|instructions|override|jailbreak|token|env|169\\.254',
+  'ignore|rules|secret|system|prompt|api_key|password|leak|'
+    + 'prednisone|dosage|instructions|override|jailbreak|token|env|169\\.254',
   'i',
 );
 
-function hasMarkdownImageExfil(text: string): boolean {
-  const bangIdx = text.indexOf('![');
-  if (bangIdx === -1) {
-    return false;
+function hasMarkdownExfil(text: string): boolean {
+  const lower = text.toLowerCase();
+  let pos = 0;
+  while (pos < lower.length) {
+    const linkIdx = lower.indexOf('](', pos);
+    if (linkIdx === -1) {
+      return false;
+    }
+    const tail = lower.slice(linkIdx + 2).trimStart();
+    if (tail.startsWith('http://') || tail.startsWith('https://') || tail.startsWith('//')) {
+      return true;
+    }
+    pos = linkIdx + 2;
   }
-  const rest = text.slice(bangIdx + 2).toLowerCase();
-  return rest.includes('](http://') || rest.includes('](https://');
+  return false;
 }
 
 function hasBase64Override(text: string): boolean {
@@ -176,55 +102,75 @@ function hasBase64Override(text: string): boolean {
     if (token === undefined) {
       continue;
     }
-    try {
-      const stdBase64 = token.replace(/-/g, '+').replace(/_/g, '/');
-      const decoded = Buffer.from(stdBase64, 'base64').toString('utf8');
-      if (BASE64_THREAT_RE.test(decoded)) {
-        return true;
-      }
-    } catch {
-      // Ignore non-decodable tokens
+    const stdBase64 = token.replace(/-/g, '+').replace(/_/g, '/');
+    const decoded = Buffer.from(stdBase64, 'base64').toString('utf8');
+    if (BASE64_THREAT_RE.test(decoded)) {
+      return true;
     }
   }
   return false;
 }
 
-function stripControlChars(input: string): string {
+const CITATION_TAG_RE = /\[\s*(?:CALC|AQ|SCI)\s*:[^\]]*\]/gi;
+
+function stripAngleTagNoise(input: string): string {
+  return input.replace(/<[^<>]*>/g, ' ');
+}
+
+/** Removes citation tags other than exact keys supplied by the deterministic report. */
+export function stripDisallowedCitationTags(
+  text: string,
+  allowedKeys?: ReadonlySet<string>,
+): string {
+  return text
+    .replace(CITATION_TAG_RE, (tag) => (allowedKeys?.has(tag.slice(1, -1)) ? tag : ' '))
+    .replace(/ {2,}/g, ' ')
+    .trim();
+}
+
+function stripControlChars(input: string, replacement = ''): string {
   let out = '';
   for (let i = 0; i < input.length; i += 1) {
     const code = input.charCodeAt(i);
-    out += code < 32 || code === 127 ? ' ' : (input[i] ?? '');
+    out += code < 32 || (code >= 127 && code <= 159) ? replacement : (input[i] ?? '');
   }
   return out;
 }
 
-function sanitizeText(rawText: string): string {
-  return stripControlChars(rawText.replace(/<[^>]*>/g, ' '))
+function sanitizeText(text: string): string {
+  return stripDisallowedCitationTags(stripAngleTagNoise(text))
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 800);
 }
 
+function getScanVariants(text: string): readonly [string, ...string[]] {
+  const joined = stripControlChars(text);
+  // Check both word boundaries and controls that split a word or tag.
+  return joined.length === text.length ? [text] : [stripControlChars(text, ' '), joined];
+}
+
 /**
  * Inspects raw user text for prompt-injection, XSS, SQLi, base64 overrides,
- * medical jailbreaks, secret probes, and markdown image exfiltration.
+ * medical jailbreaks, secret probes, and markdown exfiltration links.
  */
 export function inspectAndSanitizePrompt(rawText: string): PromptInspectionResult {
   const normalized = stripZeroWidthAndBidi(rawText.normalize('NFKC'));
+  const variants = getScanVariants(normalized);
   const reasons: string[] = [];
   for (const rule of DIRECT_RULES) {
-    if (rule.regex.test(normalized)) {
+    if (variants.some((text) => rule.regex.test(text))) {
       reasons.push(rule.reason);
     }
   }
-  if (hasMarkdownImageExfil(normalized)) {
+  if (variants.some(hasMarkdownExfil)) {
     reasons.push('markdown_exfil');
   }
-  if (hasBase64Override(normalized)) {
+  if (variants.some(hasBase64Override)) {
     reasons.push('base64_override');
   }
   return {
-    sanitizedText: sanitizeText(normalized),
+    sanitizedText: sanitizeText(variants[0]),
     guardTriggered: reasons.length > 0,
     reasons,
   };
@@ -238,13 +184,24 @@ export function wrapXmlUserQuery(text: string): string {
 }
 
 /**
- * Scrubs potential API keys, env var names, or system-prompt echoes from output text.
+ * Scrubs API keys, Bearer tokens, env var names, runtime secrets, and system-prompt echoes.
  */
 export function scrubSecretsFromOutput(text: string): string {
-  return text
+  let scrubbed = text
     .replace(/AIza[0-9A-Za-z_-]{35}/g, '[REDACTED]')
     .replace(/sk-[A-Za-z0-9]{20,}/g, '[REDACTED]')
-    .replace(/GEMINI_API_KEY/gi, '[REDACTED_ENV]')
+    .replace(/ghp_[A-Za-z0-9]{36}/g, '[REDACTED]')
+    .replace(/AKIA[0-9A-Z]{16}/g, '[REDACTED]')
+    .replace(/Bearer\s+[A-Za-z0-9._-]{16,}/gi, 'Bearer [REDACTED]')
+    .replace(/(GEMINI_API_KEY|OPENAI_API_KEY|AUTH_SECRET)/gi, '[REDACTED_ENV]')
     .replace(/process\.env\.[A-Z0-9_]+/gi, '[REDACTED_ENV]')
     .replace(/system\s+prompt:/gi, 'guidance:');
+
+  const env = getEnvConfig();
+  for (const runtimeSecret of [env.geminiApiKey, env.authSecret]) {
+    if (runtimeSecret.length >= 12 && scrubbed.includes(runtimeSecret)) {
+      scrubbed = scrubbed.split(runtimeSecret).join('[REDACTED]');
+    }
+  }
+  return scrubbed;
 }

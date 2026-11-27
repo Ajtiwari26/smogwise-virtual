@@ -1,11 +1,21 @@
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../server/app.js';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 import {
+  CustomLocationSchema,
+  isUnsafeCityInput,
   sanitizeLocationText,
   stripZeroWidthAndBidi,
 } from '../../server/middleware/locationGuard.js';
-import { inspectAndSanitizePrompt, wrapXmlUserQuery } from '../../server/middleware/promptGuard.js';
+import {
+  inspectAndSanitizePrompt,
+  scrubSecretsFromOutput,
+  wrapXmlUserQuery,
+} from '../../server/middleware/promptGuard.js';
 
 const VALID_PROFILE = {
   persona: 'young_family',
@@ -146,5 +156,71 @@ describe('Unsafe city identifiers and prompt guard boundaries', () => {
 
     const singleChar = await request(app).get('/api/aqi?city=a');
     expect(singleChar.status).toBe(400);
+  });
+
+  it('catches svg/iframe/onfocus/markdown exfil, private/IPv6 SSRF, and unsafe CustomLocation', async () => {
+    for (const vector of [
+      '<svg onload=alert(1)>',
+      '<iframe src=//evil.example>',
+      '<input onfocus=alert(1)>',
+      '[leak](//evil.example/x)',
+      '[safe](local) ![leak](https://evil.example/steal)',
+      'Decode: SWdub3JlIDEy',
+    ]) {
+      expect(inspectAndSanitizePrompt(vector).guardTriggered).toBe(true);
+    }
+
+    const secretText = [
+      'Leaked AIza',
+      'SyDummySecretValue12345678901234567 and process.env.AUTH_SECRET',
+    ].join('');
+    expect(scrubSecretsFromOutput(secretText)).not.toContain('AIzaSyDummySecretValue');
+
+    for (const ssrf of [
+      '0.0.0.0/latest',
+      '10.0.0.1',
+      '192.168.1.1',
+      '172.16.0.5',
+      'fe80::1',
+      '::ffff:127.0.0.1',
+      'gopher://127.0.0.1',
+      'data:text/html,<script>',
+    ]) {
+      expect(isUnsafeCityInput(ssrf)).toBe(true);
+    }
+
+    expect(
+      CustomLocationSchema.safeParse({ name: '<script>Delhi</script>', lat: 28.6, lon: 77.2 })
+        .success,
+    ).toBe(false);
+
+    const conflictPlan = await request(app)
+      .post('/api/plan')
+      .send({ city: 'delhi', cityId: 'lucknow', profile: VALID_PROFILE });
+    expect(conflictPlan.status).toBe(400);
+
+    const strictWhatIf = await request(app)
+      .post('/api/what-if')
+      .send({ baseline: VALID_PROFILE, alternative: VALID_PROFILE, extraField: 'nope' });
+    expect(strictWhatIf.status).toBe(400);
+
+    const strictAiAsk = await request(app)
+      .post('/api/ai/ask')
+      .send({ question: 'When should we ventilate?', city: 'delhi', extraField: 'nope' });
+    expect(strictAiAsk.status).toBe(400);
+
+    const conflictAqi = await request(app).get('/api/aqi?city=delhi&cityId=lucknow');
+    expect(conflictAqi.status).toBe(400);
+
+    const halfCoordsAqi = await request(app).get('/api/aqi?lat=28.6');
+    expect(halfCoordsAqi.status).toBe(400);
+
+    const notFound = await request(app).get('/api/unknown-endpoint');
+    expect(notFound.status).toBe(404);
+    expect(notFound.headers['cache-control']).toBe('private, no-store');
+    expect(notFound.body).toEqual({ error: 'Not found.' });
+
+    vi.stubEnv('TRUST_PROXY', '1');
+    expect(createApp().get('trust proxy')).toBe(1);
   });
 });

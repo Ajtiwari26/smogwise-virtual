@@ -1,143 +1,26 @@
 /**
- * Input validation, XML escaping, and SSRF/injection guards for location
- * search and AQI lookup endpoints.
+ * Zod validation schemas and SSRF guards for location search and AQI lookup endpoints.
  */
 
 import { z } from 'zod';
 import { INDIA_BOUNDS } from '../../src/domain/cityPresets.js';
+import {
+  isUnsafeLocationQuery,
+  SAFE_CITY_ID_RE,
+  SAFE_CITY_RE,
+  sanitizeLocationText,
+} from './textSanitizer.js';
 
-/** Balanced character class for safe city names (no escaped brackets). */
-export const SAFE_CITY_RE = /^[\p{L}\p{N} .\-()]{1,64}$/u;
-
-/** Balanced character class for canonical preset IDs (allows underscore). */
-export const SAFE_CITY_ID_RE = /^[\p{L}\p{N}_ .\-()]{2,64}$/u;
-
-const CITATION_PREFIXES = [
-  '[CALC:',
-  '[SCI:',
-  '[AQ:',
-  '[POLICY:',
-  '[PRESET:',
-] as const;
-
-const UNSAFE_CHARS = new Set(['<', '>', '[', ']', '{', '}', '\\', ';', '|']);
-
-const UNSAFE_QUERY_RE = new RegExp(
-  'https?:\\/\\/|file:\\/\\/|ftp:\\/\\/|169\\.254\\.|127\\.0\\.0\\.1|'
-    + 'localhost|::1|metadata\\.google\\.internal|169\\.254\\.169\\.254',
-  'i',
-);
-
-function isZeroWidthOrBidiCode(code: number): boolean {
-  return (
-    (code >= 0x200b && code <= 0x200f) ||
-    (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2066 && code <= 0x2069) ||
-    code === 0xfeff
-  );
-}
-
-/**
- * Strips zero-width formatting and bidirectional override characters via charCode checks.
- */
-export function stripZeroWidthAndBidi(raw: string): string {
-  let out = '';
-  for (let i = 0; i < raw.length; i += 1) {
-    const code = raw.charCodeAt(i);
-    if (!isZeroWidthOrBidiCode(code)) {
-      out += raw[i] ?? '';
-    }
-  }
-  return out;
-}
-
-/**
- * Strips structured citation tags such as `[CALC:...]`, `[SCI:...]`, `[AQ:...]`,
- * `[POLICY:...]`, or `[PRESET:...]` without using escaped bracket regex literals.
- */
-export function stripCitationTags(raw: string): string {
-  let result = raw;
-  let searchFrom = 0;
-
-  while (searchFrom < result.length) {
-    const openIdx = result.indexOf('[', searchFrom);
-    if (openIdx === -1) {
-      break;
-    }
-    const closeIdx = result.indexOf(']', openIdx + 1);
-    if (closeIdx === -1) {
-      break;
-    }
-
-    const segment = result.slice(openIdx, closeIdx + 1);
-    const upperSegment = segment.toUpperCase();
-    const isCitation = CITATION_PREFIXES.some((prefix) => upperSegment.startsWith(prefix));
-
-    if (isCitation) {
-      result = `${result.slice(0, openIdx)} ${result.slice(closeIdx + 1)}`;
-      searchFrom = openIdx;
-    } else {
-      searchFrom = closeIdx + 1;
-    }
-  }
-
-  return result;
-}
-
-/**
- * Normalizes and sanitizes untrusted location text for safe display and storage.
- */
-export function sanitizeLocationText(raw: string): string {
-  const normalized = stripZeroWidthAndBidi(raw.normalize('NFKC'));
-  const withoutTags = stripCitationTags(normalized);
-  return withoutTags
-    .replace(/[^\p{L}\p{N} .\-()]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 64);
-}
-
-/**
- * Escapes XML special characters (`&`, `<`, `>`, `"`, `'`).
- */
-export function escapeXml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\x22/g, '&quot;')
-    .replace(/\x27/g, '&apos;');
-}
-
-/**
- * Detects URLs, SSRF targets, control characters, and delimiter injection characters.
- */
-export function isUnsafeLocationQuery(raw: string): boolean {
-  const normalized = stripZeroWidthAndBidi(raw.normalize('NFKC'));
-  for (let i = 0; i < normalized.length; i += 1) {
-    const code = normalized.charCodeAt(i);
-    const ch = normalized[i] ?? '';
-    if (code < 32 || code === 127 || UNSAFE_CHARS.has(ch)) {
-      return true;
-    }
-  }
-  return UNSAFE_QUERY_RE.test(normalized);
-}
-
-/**
- * Canonical validator for city names and preset IDs (e.g., `delhi_anand_vihar`).
- */
-export function isUnsafeCityInput(rawCity: string): boolean {
-  const nfkc = rawCity.normalize('NFKC');
-  if (stripZeroWidthAndBidi(nfkc) !== nfkc) {
-    return true;
-  }
-  const trimmed = nfkc.trim();
-  if (trimmed.length === 0 || isUnsafeLocationQuery(trimmed)) {
-    return true;
-  }
-  return !SAFE_CITY_ID_RE.test(trimmed);
-}
+/** Re-exported XML escaping helper for prompt isolation. */
+export { escapeXml } from './textSanitizer.js';
+/** Re-exported canonical preset/city input validator. */
+export { isUnsafeCityInput } from './textSanitizer.js';
+/** Re-exported untrusted location label sanitizer. */
+export { sanitizeLocationText } from './textSanitizer.js';
+/** Re-exported bracket citation tag stripper. */
+export { stripCitationTags } from './textSanitizer.js';
+/** Re-exported zero-width and BiDi Unicode stripper. */
+export { stripZeroWidthAndBidi } from './textSanitizer.js';
 
 /** Zod schema validating GET /api/locations/search query parameter `q`. */
 export const LocationSearchQuerySchema = z
@@ -158,8 +41,6 @@ export const StrictCoordSchema = z
   .regex(/^-?\d{1,3}(?:\.\d{1,6})?$/)
   .transform(Number)
   .pipe(z.number().finite());
-
-
 
 const OptionalSafeLabelSchema = z
   .string()
@@ -238,6 +119,14 @@ function validateAqiPair(
 }
 
 function validateAqiQuery(data: AqiQueryFields, ctx: z.RefinementCtx): void {
+  if (data.city !== undefined && data.cityId !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Cannot specify both city and cityId.',
+      path: ['city'],
+    });
+    return;
+  }
   const hasCity = data.city !== undefined || data.cityId !== undefined;
   const hasLat = data.lat !== undefined;
   const hasLon = data.lon !== undefined;
@@ -250,7 +139,6 @@ function validateAqiQuery(data: AqiQueryFields, ctx: z.RefinementCtx): void {
     });
     return;
   }
-
   if (hasLat !== hasLon) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -259,7 +147,6 @@ function validateAqiQuery(data: AqiQueryFields, ctx: z.RefinementCtx): void {
     });
     return;
   }
-
   validateAqiPair(data.lat, data.lon, ctx);
 }
 
@@ -281,10 +168,12 @@ export const CustomLocationSchema = z
   .object({
     name: z
       .string()
+      .refine((s) => !isUnsafeLocationQuery(s), 'Unsafe location name')
       .transform((s) => sanitizeLocationText(s))
       .refine((s) => s.length >= 1, 'Invalid location name'),
     state: z
       .string()
+      .refine((s) => !isUnsafeLocationQuery(s), 'Unsafe location state')
       .transform((s) => sanitizeLocationText(s))
       .optional(),
     lat: z.number().finite().min(INDIA_BOUNDS.latMin).max(INDIA_BOUNDS.latMax),

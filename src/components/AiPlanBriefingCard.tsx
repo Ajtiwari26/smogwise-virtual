@@ -5,6 +5,7 @@
 import type { DeterministicReport, LanguageCode } from '../domain/types.js';
 import type { PlanBriefingApiResponse } from '../services/apiClient.js';
 
+/** Props for the AiPlanBriefingCard component. */
 export interface AiPlanBriefingCardProps {
   readonly report: DeterministicReport;
   readonly briefing: PlanBriefingApiResponse | undefined;
@@ -28,11 +29,11 @@ function buildPreviewView(report: DeterministicReport, isHindi: boolean): PlanBr
     whyActions: isHindi
       ? [
         `वर्तमान CPCB AQI ${aqi} के अनुसार घरेलू प्रवेश नियंत्रण प्राथमिकता पर है [AQ:SOURCE]।`,
-        `चयनित उपाय घर के अंदर PM2.5 स्तर घटाकर अधिकतम सुरक्षा देते हैं [CALC:INDOOR_PM25]।`,
+        'चयनित उपाय घर के अंदर PM2.5 स्तर घटाकर अधिकतम सुरक्षा देते हैं [CALC:INDOOR_PM25]।',
       ]
       : [
         `Current CPCB AQI ${aqi} prioritizes indoor infiltration barriers first [AQ:SOURCE].`,
-        `Selected actions lower indoor PM2.5 exposure within budget [CALC:INDOOR_PM25].`,
+        'Selected actions lower indoor PM2.5 exposure within budget [CALC:INDOOR_PM25].',
       ],
     language: isHindi ? 'hi' : 'en',
     mode: 'offline_grounded',
@@ -47,9 +48,9 @@ function BriefingHeader(props: {
 }): React.JSX.Element {
   const { isHindi, isLoading, isGemini } = props;
   const modeLabel = isGemini
-    ? (isHindi ? 'Gemini 4 ग्राउंडेड' : 'Gemini 4 Grounded')
+    ? 'Gemini 4 Grounded'
     : (isHindi ? 'टियर-1 सत्यापित सारांश' : 'Tier-1 Grounded Summary');
-  const badgeTone = isGemini ? 'bg-teal-50 text-teal-800' : 'bg-slate-100 text-slate-800';
+  const badgeTone = isGemini ? 'bg-teal-50 text-teal-900' : 'bg-slate-100 text-slate-900';
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -57,11 +58,9 @@ function BriefingHeader(props: {
         {isHindi ? 'ग्राउंडेड AI ब्रीफिंग' : 'Grounded AI Briefing'}
       </span>
       <div className="flex items-center gap-2">
-        {isLoading ? (
-          <span className="text-xs font-medium text-slate-800" aria-live="polite">
-            {isHindi ? 'संश्लेषण हो रहा है…' : 'Synthesizing…'}
-          </span>
-        ) : null}
+        <span className="text-xs font-medium text-slate-800" aria-live="polite">
+          {isLoading ? (isHindi ? 'संश्लेषण हो रहा है…' : 'Synthesizing…') : ''}
+        </span>
         <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${badgeTone}`}>
           {modeLabel}
         </span>
@@ -85,7 +84,7 @@ function CitationBadges(props: {
       {props.citations.map((key) => (
         <span
           key={key}
-          className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-[11px] text-slate-700"
+          className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-800"
         >
           [{key}]
         </span>
@@ -111,7 +110,7 @@ export function AiPlanBriefingCard({
     <section
       aria-labelledby="ai-briefing-heading"
       aria-busy={isLoading}
-      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+      className="rounded-2xl border border-slate-300 bg-white p-5 shadow-sm"
     >
       <BriefingHeader
         isHindi={isHindi}

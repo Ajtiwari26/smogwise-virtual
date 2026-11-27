@@ -25,20 +25,22 @@ export function isWithinIndiaCoords(lat: number, lon: number): boolean {
   );
 }
 
+const DEFAULT_CITY_PRESET: CityPreset = {
+  id: 'delhi_anand_vihar',
+  name: 'Delhi (Anand Vihar)',
+  nameHi: 'दिल्ली (आनंद विहार)',
+  state: 'Delhi NCR',
+  lat: 28.6469,
+  lon: 77.316,
+  baselinePm25: 315,
+  baselinePm10: 460,
+  baselineNo2: 92,
+  grapStage: 'GRAP_IV',
+};
+
 /** Curated list of 12 winter inversion and urban smog city presets. */
 export const CITY_PRESETS: readonly CityPreset[] = [
-  {
-    id: 'delhi_anand_vihar',
-    name: 'Delhi (Anand Vihar)',
-    nameHi: 'दिल्ली (आनंद विहार)',
-    state: 'Delhi NCR',
-    lat: 28.6469,
-    lon: 77.316,
-    baselinePm25: 315,
-    baselinePm10: 460,
-    baselineNo2: 92,
-    grapStage: 'GRAP_IV',
-  },
+  DEFAULT_CITY_PRESET,
   {
     id: 'delhi_rohini',
     name: 'Delhi (Rohini)',
@@ -173,6 +175,10 @@ export const CITY_PRESETS: readonly CityPreset[] = [
   },
 ];
 
+const CITY_PRESET_MAP = new Map<string, CityPreset>(
+  CITY_PRESETS.map((preset) => [preset.id, preset]),
+);
+
 const CITY_ALIAS_MAP: Readonly<Record<string, string>> = {
   anand_vihar: 'delhi_anand_vihar',
   delhi: 'delhi_anand_vihar',
@@ -197,7 +203,30 @@ const CITY_ALIAS_MAP: Readonly<Record<string, string>> = {
  */
 export function resolveCityPreset(cityId: string): CityPreset {
   const normalized = cityId.trim().toLowerCase().replace(/[\s-]+/g, '_');
-  const targetId = CITY_ALIAS_MAP[normalized] ?? normalized;
-  const match = CITY_PRESETS.find((preset) => preset.id === targetId);
-  return match ?? (CITY_PRESETS[0] as CityPreset);
+  const targetId = Object.hasOwn(CITY_ALIAS_MAP, normalized)
+    ? (CITY_ALIAS_MAP[normalized] ?? normalized)
+    : normalized;
+  return CITY_PRESET_MAP.get(targetId) ?? DEFAULT_CITY_PRESET;
+}
+
+/**
+ * Finds the nearest curated CityPreset for given coordinates using Euclidean degree distance.
+ * Falls back to DEFAULT_CITY_PRESET when coordinates are non-finite.
+ */
+export function findNearestCityPreset(lat: number, lon: number): CityPreset {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return DEFAULT_CITY_PRESET;
+  }
+  let best = DEFAULT_CITY_PRESET;
+  let minDistSq = Number.POSITIVE_INFINITY;
+  for (const preset of CITY_PRESETS) {
+    const dLat = preset.lat - lat;
+    const dLon = preset.lon - lon;
+    const distSq = dLat * dLat + dLon * dLon;
+    if (distSq < minDistSq) {
+      minDistSq = distSq;
+      best = preset;
+    }
+  }
+  return best;
 }

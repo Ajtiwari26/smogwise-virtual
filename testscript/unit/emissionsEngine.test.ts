@@ -107,4 +107,33 @@ describe('emissionsEngine budget ranking & RWA scaling', () => {
     );
     expect(duped.monthlyOperatingCostInr).toBe(single.monthlyOperatingCostInr);
   });
+
+  it('covers two_wheeler/carpool commutes and clamps non-finite RWA multipliers safely', () => {
+    const twoWheeler = computeRawDailyEmissions(makeProfile({ commuteMode: 'two_wheeler' }));
+    const carpool = computeRawDailyEmissions(makeProfile({ commuteMode: 'carpool' }));
+    expect(twoWheeler.co2eGramsPerDay).toBeGreaterThan(carpool.co2eGramsPerDay);
+
+    const invalidRwa = computeEmissionsMetrics(
+      makeProfile({
+        commuteMode: 'metro_bus',
+        commuteDistanceKm: Number.NaN,
+        rwaHouseholds: -10,
+        rwaAdoptionRate: 5,
+      }),
+    );
+    expect(Number.isFinite(invalidRwa.communityCo2eAvoidedKgPerMonth)).toBe(true);
+    expect(invalidRwa.communityCo2eAvoidedKgPerMonth).toBeGreaterThanOrEqual(0);
+
+    const unknownRuntime: UserProfile = JSON.parse(
+      JSON.stringify({
+        ...makeProfile(),
+        commuteMode: 'hoverboard',
+        cookingFuel: 'solar_unknown',
+        activeHacks: ['toString', 'window_sealing'],
+      }),
+    );
+    const fallbackRaw = computeRawDailyEmissions(unknownRuntime);
+    expect(Number.isFinite(fallbackRaw.co2eGramsPerDay)).toBe(true);
+    expect(fallbackRaw.monthlyOperatingCostInr).toBeGreaterThan(0);
+  });
 });

@@ -1,14 +1,17 @@
 /**
- * Authentication service providing scrypt credential verification and HMAC-SHA256 tokens.
+ * Authentication service providing salted scrypt verification, HMAC-SHA256 tokens,
+ * and bounded jti revocation on logout.
  */
 
 import crypto from 'node:crypto';
-import type { LanguageCode, PersonaType } from '../../src/domain/types.js';
+import { z } from 'zod';
+import { createLruCache } from '../cache/lruCache.js';
 import {
   DUMMY_SCRYPT_RECORD,
   findAccountByEmail,
   toPublicUser,
   type PublicUser,
+  type StoredAuthAccount,
 } from '../config/authAccounts.js';
 import { getEnvConfig } from '../config/env.js';
 
@@ -16,38 +19,46 @@ import { getEnvConfig } from '../config/env.js';
 export const SESSION_COOKIE_NAME = 'smogwise_session';
 
 const SESSION_TTL_SECONDS = 86400;
+const MAX_CLOCK_SKEW_SECONDS = 60;
 const SCRYPT_KEY_LENGTH = 64;
-const VALID_PERSONAS: ReadonlySet<string> = new Set<PersonaType>([
-  'young_family',
-  'sensitive_household',
-  'rwa_coordinator',
-  'office_commuter',
-  'outdoor_student',
-]);
-const VALID_LANGS: ReadonlySet<string> = new Set<LanguageCode>(['en', 'hi']);
+const SCRYPT_OPTIONS: crypto.ScryptOptions = { N: 16384, r: 8, p: 1 };
+const REVOKED_JTI_CACHE_SIZE = 1000;
 
-interface SessionTokenPayload {
-  readonly sub: string;
-  readonly email: string;
-  readonly name: string;
-  readonly personaId: PersonaType;
-  readonly defaultLang: LanguageCode;
-  readonly defaultCityId: string;
-  readonly iat: number;
-  readonly exp: number;
-}
+const revokedJtiCache = createLruCache<true>(
+  REVOKED_JTI_CACHE_SIZE,
+  SESSION_TTL_SECONDS * 1000,
+);
+
+const SessionTokenPayloadSchema = z.object({
+  sub: z.string().trim().min(1),
+  email: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  personaId: z.enum([
+    'young_family',
+    'sensitive_household',
+    'rwa_coordinator',
+    'office_commuter',
+    'outdoor_student',
+  ]),
+  defaultLang: z.enum(['en', 'hi']),
+  defaultCityId: z.string().trim().min(1),
+  jti: z.string().trim().min(8).max(64),
+  iat: z.number().finite(),
+  exp: z.number().finite(),
+});
+
+type SessionTokenPayload = z.infer<typeof SessionTokenPayloadSchema>;
 
 function computeHmacSignature(encodedPayload: string, secret: string): string {
   return crypto.createHmac('sha256', secret).update(encodedPayload).digest('base64url');
 }
 
-function constantTimeHexEqual(leftHex: string, rightHex: string): boolean {
-  const leftBuf = Buffer.from(leftHex, 'hex');
-  const rightBuf = Buffer.from(rightHex, 'hex');
-  if (leftBuf.length === 0 || leftBuf.length !== rightBuf.length) {
+function constantTimeBufferHexEqual(derivedBuf: Buffer, targetHex: string): boolean {
+  const rightBuf = Buffer.from(targetHex, 'hex');
+  if (derivedBuf.length === 0 || derivedBuf.length !== rightBuf.length) {
     return false;
   }
-  return crypto.timingSafeEqual(leftBuf, rightBuf);
+  return crypto.timingSafeEqual(derivedBuf, rightBuf);
 }
 
 function constantTimeUtf8Equal(left: string, right: string): boolean {
@@ -63,69 +74,58 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function deriveScryptAsync(password: string, salt: string): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    crypto.scrypt(password, salt, SCRYPT_KEY_LENGTH, SCRYPT_OPTIONS, (err, derivedKey) => {
+      if (err !== null) {
+        reject(err);
+        return;
+      }
+      resolve(derivedKey);
+    });
+  });
+}
+
 function parseSessionPayload(encodedPayload: string): SessionTokenPayload | null {
   try {
     const decoded = Buffer.from(encodedPayload, 'base64url').toString('utf8');
     const parsed: unknown = JSON.parse(decoded);
-    if (parsed === null || typeof parsed !== 'object') {
+    const checked = SessionTokenPayloadSchema.safeParse(parsed);
+    if (!checked.success) {
       return null;
     }
-    const record = parsed as Record<string, unknown>;
-    if (!hasValidPayloadStrings(record) || !hasValidPayloadTimes(record)) {
+    const { iat, exp } = checked.data;
+    if (exp <= iat || exp - iat > SESSION_TTL_SECONDS) {
       return null;
     }
-    return {
-      sub: record['sub'] as string,
-      email: record['email'] as string,
-      name: record['name'] as string,
-      personaId: record['personaId'] as PersonaType,
-      defaultLang: record['defaultLang'] as LanguageCode,
-      defaultCityId: record['defaultCityId'] as string,
-      iat: record['iat'] as number,
-      exp: record['exp'] as number,
-    };
-  } catch {
+    return checked.data;
+  } catch (err: unknown) {
+    void err;
     return null;
   }
 }
 
-function hasValidPayloadStrings(record: Record<string, unknown>): boolean {
-  return (
-    isNonEmptyString(record['sub']) &&
-    isNonEmptyString(record['email']) &&
-    isNonEmptyString(record['name']) &&
-    isNonEmptyString(record['defaultCityId']) &&
-    typeof record['personaId'] === 'string' &&
-    VALID_PERSONAS.has(record['personaId']) &&
-    typeof record['defaultLang'] === 'string' &&
-    VALID_LANGS.has(record['defaultLang'])
-  );
+interface CredentialCheckTarget {
+  readonly account: StoredAuthAccount | undefined;
+  readonly salt: string;
+  readonly hash: string;
 }
 
-function hasValidPayloadTimes(record: Record<string, unknown>): boolean {
-  const iat = record['iat'];
-  const exp = record['exp'];
-  return (
-    typeof iat === 'number' &&
-    Number.isFinite(iat) &&
-    typeof exp === 'number' &&
-    Number.isFinite(exp) &&
-    exp > iat
-  );
-}
-
-/**
- * Verifies user email and password in constant time using scryptSync and timingSafeEqual.
- */
-export function verifyCredentials(email: string, password: string): PublicUser | null {
-  if (password.length === 0) {
-    return null;
-  }
+function resolveCredentialTarget(email: string): CredentialCheckTarget {
   const account = findAccountByEmail(email);
-  const targetSalt = account?.salt ?? DUMMY_SCRYPT_RECORD.salt;
-  const targetHash = account?.passwordHash ?? DUMMY_SCRYPT_RECORD.passwordHash;
-  const derivedHex = crypto.scryptSync(password, targetSalt, SCRYPT_KEY_LENGTH).toString('hex');
-  const matches = constantTimeHexEqual(derivedHex, targetHash);
+  return {
+    account,
+    salt: account?.salt ?? DUMMY_SCRYPT_RECORD.salt,
+    hash: account?.passwordHash ?? DUMMY_SCRYPT_RECORD.passwordHash,
+  };
+}
+
+function finalizeCredentialCheck(
+  account: StoredAuthAccount | undefined,
+  derivedBuf: Buffer,
+  targetHash: string,
+): PublicUser | null {
+  const matches = constantTimeBufferHexEqual(derivedBuf, targetHash);
   if (account === undefined || !matches) {
     return null;
   }
@@ -133,7 +133,34 @@ export function verifyCredentials(email: string, password: string): PublicUser |
 }
 
 /**
- * Signs an HMAC-SHA256 session token for an authenticated user with a 24-hour TTL.
+ * Verifies user email and password synchronously in constant time using scryptSync.
+ */
+export function verifyCredentials(email: string, password: string): PublicUser | null {
+  if (password.length === 0) {
+    return null;
+  }
+  const target = resolveCredentialTarget(email);
+  const derivedBuf = crypto.scryptSync(password, target.salt, SCRYPT_KEY_LENGTH, SCRYPT_OPTIONS);
+  return finalizeCredentialCheck(target.account, derivedBuf, target.hash);
+}
+
+/**
+ * Verifies user email and password asynchronously without blocking the event loop.
+ */
+export async function verifyCredentialsAsync(
+  email: string,
+  password: string,
+): Promise<PublicUser | null> {
+  if (password.length === 0) {
+    return null;
+  }
+  const target = resolveCredentialTarget(email);
+  const derivedBuf = await deriveScryptAsync(password, target.salt);
+  return finalizeCredentialCheck(target.account, derivedBuf, target.hash);
+}
+
+/**
+ * Signs an HMAC-SHA256 session token with a unique jti and 24-hour TTL.
  */
 export function signSessionToken(user: PublicUser, nowMs = Date.now()): string {
   const iat = Math.floor(nowMs / 1000);
@@ -144,6 +171,7 @@ export function signSessionToken(user: PublicUser, nowMs = Date.now()): string {
     personaId: user.personaId,
     defaultLang: user.defaultLang,
     defaultCityId: user.defaultCityId,
+    jti: crypto.randomUUID(),
     iat,
     exp: iat + SESSION_TTL_SECONDS,
   };
@@ -152,10 +180,7 @@ export function signSessionToken(user: PublicUser, nowMs = Date.now()): string {
   return `${encodedPayload}.${signature}`;
 }
 
-/**
- * Verifies an HMAC-SHA256 session token and returns the embedded PublicUser when valid.
- */
-export function verifySessionToken(token: string, nowMs = Date.now()): PublicUser | null {
+function verifyAndDecodeToken(token: string, nowMs: number): SessionTokenPayload | null {
   const parts = token.split('.');
   if (parts.length !== 2) {
     return null;
@@ -170,7 +195,23 @@ export function verifySessionToken(token: string, nowMs = Date.now()): PublicUse
   }
   const payload = parseSessionPayload(encodedPayload);
   const nowSeconds = Math.floor(nowMs / 1000);
-  if (payload === null || payload.exp <= nowSeconds) {
+  if (
+    payload === null ||
+    payload.exp <= nowSeconds ||
+    payload.iat > nowSeconds + MAX_CLOCK_SKEW_SECONDS ||
+    revokedJtiCache.get(payload.jti) === true
+  ) {
+    return null;
+  }
+  return payload;
+}
+
+/**
+ * Verifies an HMAC-SHA256 session token and returns the embedded PublicUser when valid.
+ */
+export function verifySessionToken(token: string, nowMs = Date.now()): PublicUser | null {
+  const payload = verifyAndDecodeToken(token, nowMs);
+  if (payload === null) {
     return null;
   }
   return {
@@ -181,6 +222,24 @@ export function verifySessionToken(token: string, nowMs = Date.now()): PublicUse
     defaultLang: payload.defaultLang,
     defaultCityId: payload.defaultCityId,
   };
+}
+
+/**
+ * Revokes a valid session token's jti in the bounded LRU revocation set on logout.
+ */
+export function revokeSessionToken(token: string, nowMs = Date.now()): boolean {
+  const payload = verifyAndDecodeToken(token, nowMs);
+  if (payload === null) {
+    return false;
+  }
+  const remainingTtlMs = Math.max(1000, (payload.exp - Math.floor(nowMs / 1000)) * 1000);
+  revokedJtiCache.set(payload.jti, true, remainingTtlMs);
+  return true;
+}
+
+/** Clears revoked session token entries (used in unit tests). */
+export function clearRevokedSessionTokens(): void {
+  revokedJtiCache.clear();
 }
 
 function extractCookieToken(cookieHeader: string | undefined): string | undefined {
@@ -226,8 +285,8 @@ export function extractSessionToken(
 /**
  * Builds a Set-Cookie header value establishing an authenticated session.
  */
-export function buildSessionCookie(token: string, isProd: boolean): string {
-  const secureAttr = isProd ? '; Secure' : '';
+export function buildSessionCookie(token: string, isSecure: boolean): string {
+  const secureAttr = isSecure ? '; Secure' : '';
   return (
     `${SESSION_COOKIE_NAME}=${token}; HttpOnly; SameSite=Lax; Path=/; ` +
     `Max-Age=${SESSION_TTL_SECONDS}${secureAttr}`
@@ -237,7 +296,7 @@ export function buildSessionCookie(token: string, isProd: boolean): string {
 /**
  * Builds a Set-Cookie header value clearing the session cookie.
  */
-export function buildClearSessionCookie(isProd: boolean): string {
-  const secureAttr = isProd ? '; Secure' : '';
+export function buildClearSessionCookie(isSecure: boolean): string {
+  const secureAttr = isSecure ? '; Secure' : '';
   return `${SESSION_COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secureAttr}`;
 }

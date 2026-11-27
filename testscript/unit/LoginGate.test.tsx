@@ -192,4 +192,57 @@ describe('LoginGate bilingual mode & Header auth controls', () => {
     expect(container.querySelector('#header-city-select')).toBeNull();
     expect(container.querySelectorAll('h1')).toHaveLength(1);
   });
+
+  it('wires form ARIA validation errors on empty submit, rate limit, API error, and network failure', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ error: 'RATE_LIMITED' }, 429))
+      .mockResolvedValueOnce(jsonResponse({ error: 'SERVER_ERR', message: 'Maintenance window' }, 503))
+      .mockRejectedValueOnce(new Error('offline'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { rerender } = render(
+      <LoginGate
+        language="en"
+        isCheckingSession={true}
+        onLanguageChange={vi.fn()}
+        onLoginSuccess={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Checking active session...')).toBeInTheDocument();
+
+    const submitBtn = screen.getByRole('button', { name: /Sign In to Dashboard/i });
+    expect(submitBtn).toBeDisabled();
+
+    rerender(
+      <LoginGate
+        language="en"
+        isCheckingSession={false}
+        onLanguageChange={vi.fn()}
+        onLoginSuccess={vi.fn()}
+      />,
+    );
+    fireEvent.click(submitBtn);
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Please enter both email address and password');
+    expect(screen.getByLabelText(/Email Address/i)).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText(/Email Address/i)).toHaveAttribute('aria-describedby', 'login-error-alert');
+
+    fireEvent.change(screen.getByLabelText(/Email Address/i), { target: { value: 'a@b.com' } });
+    fireEvent.change(screen.getByLabelText(/^Password$/i), { target: { value: 'secret123' } });
+    fireEvent.click(submitBtn);
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toContain('Too many sign-in attempts');
+    });
+
+    fireEvent.click(submitBtn);
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toContain('Maintenance window');
+    });
+
+    fireEvent.click(submitBtn);
+    await waitFor(() => {
+      expect(screen.getByRole('alert').textContent).toContain('Unable to reach authentication service');
+    });
+  });
 });

@@ -1,237 +1,259 @@
 /**
- * State, debounced search, India-bounded geolocation, and keyboard hooks.
+ * State, debounced search, India-bounded geolocation & keyboard hooks for LocationSearchCombobox.
  */
 
-import type {
-  Dispatch, KeyboardEvent, MutableRefObject, RefObject, SetStateAction,
-} from 'react';
+import type { Dispatch, KeyboardEvent, MutableRefObject, RefObject, SetStateAction } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isWithinIndiaCoords } from '../domain/cityPresets.js';
 import type { CustomLocation, LocationSearchItem } from '../domain/types.js';
 import { searchLocations } from '../services/apiClient.js';
+import {
+  computeNextKeyState,
+  formatDisplayLocation,
+  INITIAL_SEARCH_STATE,
+  useGeolocationTrigger,
+  type SearchState,
+} from './useLocationComboboxHelpers.js';
+
+/** Re-exported search state interface for location combobox hooks. */
+export type { SearchState } from './useLocationComboboxHelpers.js';
 
 const SEARCH_DEBOUNCE_MS = 350;
-const GEO_TIMEOUT_MS = 8000;
 
-export interface SearchState {
-  readonly results: readonly LocationSearchItem[];
-  readonly isOpen: boolean;
-  readonly isSearching: boolean;
-  readonly activeIndex: number;
+function runDebouncedQuery(
+  query: string,
+  isHindi: boolean,
+  signal: AbortSignal,
+  canOpenRef: RefObject<boolean>,
+  setSearchState: Dispatch<SetStateAction<SearchState>>,
+  setStatusMessage: Dispatch<SetStateAction<string>>,
+): void {
+  void searchLocations(extractCitySearchTerm(query), signal)
+    .then((items) => {
+      if (signal.aborted) return;
+      const isOpen = canOpenRef.current && items.length > 0;
+      setSearchState({
+        results: items,
+        isOpen,
+        isSearching: false,
+        activeIndex: isOpen ? 0 : -1,
+        resultQuery: query,
+      });
+      if (items.length === 0) {
+        setStatusMessage(
+          isHindi
+            ? 'कोई मेल खाने वाला भारतीय शहर नहीं मिला।'
+            : 'No matching Indian locations found.',
+        );
+      }
+    })
+    .catch((err: unknown) => {
+      void err;
+      if (signal.aborted) return;
+      setSearchState(INITIAL_SEARCH_STATE);
+      setStatusMessage(
+        isHindi ? 'स्थान खोज विफल रही। पुनः प्रयास करें।' : 'Location search failed. Please retry.',
+      );
+    });
 }
 
-const INITIAL_SEARCH_STATE: SearchState = {
-  results: [],
-  isOpen: false,
-  isSearching: false,
-  activeIndex: -1,
-};
-
-
-
-function formatDisplayLocation(loc: CustomLocation): string {
-  const state = loc.state?.trim() ?? '';
-  return state.length > 0 ? `${loc.name}, ${state}` : loc.name;
-}
-
-function resolveGeoErrorMessage(err: GeolocationPositionError, isHindi: boolean): string {
-  if (err.code === err.PERMISSION_DENIED) {
-    return isHindi
-      ? 'लोकेशन अनुमति अस्वीकार कर दी गई। नीचे से शहर खोजें या चुनें।'
-      : 'Location permission denied. Search or select a city preset below.';
-  }
-  if (err.code === err.TIMEOUT) {
-    return isHindi
-      ? 'जीपीएस लोकेशन में समय समाप्त हो गया। कृपया शहर खोजें।'
-      : 'Location request timed out. Please search for your city.';
-  }
-  return isHindi
-    ? 'लोकेशन प्राप्त नहीं हो सकी। कृपया शहर का नाम टाइप करें।'
-    : 'Unable to determine your location. Please search by city name.';
+function extractCitySearchTerm(rawQuery: string): string {
+  const trimmed = rawQuery.trim();
+  const commaIdx = trimmed.indexOf(',');
+  return commaIdx === -1 ? trimmed : trimmed.slice(0, commaIdx).trim();
 }
 
 function useDebouncedLocationSearch(
   query: string,
-  skipNextSearchRef: MutableRefObject<boolean>,
+  isHindi: boolean,
+  suppressedQueryRef: MutableRefObject<string | null>,
+  canOpenRef: RefObject<boolean>,
   setSearchState: Dispatch<SetStateAction<SearchState>>,
+  setStatusMessage: Dispatch<SetStateAction<string>>,
 ): void {
+  const isHindiRef = useRef<boolean>(isHindi);
   useEffect(() => {
-    if (skipNextSearchRef.current) {
-      skipNextSearchRef.current = false;
-      return;
+    isHindiRef.current = isHindi;
+  }, [isHindi]);
+
+  useEffect(() => {
+    if (suppressedQueryRef.current !== null && query === suppressedQueryRef.current) {
+      suppressedQueryRef.current = null;
+      return undefined;
     }
-    const trimmed = query.trim();
-    if (trimmed.length < 2) {
+    suppressedQueryRef.current = null;
+    if (extractCitySearchTerm(query).length < 2) {
       setSearchState(INITIAL_SEARCH_STATE);
-      return;
+      return undefined;
     }
     const controller = new AbortController();
-    setSearchState((prev) => ({ ...prev, isSearching: true }));
+    setSearchState({ ...INITIAL_SEARCH_STATE, isSearching: true });
     const timer = setTimeout(() => {
-      void searchLocations(trimmed, controller.signal)
-        .then((items) => {
-          setSearchState({
-            results: items,
-            isOpen: items.length > 0,
-            isSearching: false,
-            activeIndex: items.length > 0 ? 0 : -1,
-          });
-        })
-        .catch(() => {
-          if (!controller.signal.aborted) setSearchState(INITIAL_SEARCH_STATE);
-        });
+      runDebouncedQuery(
+        query,
+        isHindiRef.current,
+        controller.signal,
+        canOpenRef,
+        setSearchState,
+        setStatusMessage,
+      );
     }, SEARCH_DEBOUNCE_MS);
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query, skipNextSearchRef, setSearchState]);
+  }, [query, suppressedQueryRef, canOpenRef, setSearchState, setStatusMessage]);
 }
 
-function resolveNextIndex(
-  key: string,
-  activeIndex: number,
-  length: number,
-): number | undefined {
-  switch (key) {
-    case 'ArrowDown':
-      return (activeIndex + 1) % length;
-    case 'ArrowUp':
-      return (activeIndex - 1 + length) % length;
-    case 'Home':
-      return 0;
-    case 'End':
-      return length - 1;
-    default:
-      return undefined;
-  }
+function useOutsideDismiss(
+  containerRef: RefObject<HTMLDivElement | null>,
+  closeSuggestions: () => void,
+): void {
+  useEffect(() => {
+    const onDocDown = (event: MouseEvent): void => {
+      const target = event.target;
+      const el = containerRef.current;
+      if (el !== null && target instanceof Node && !el.contains(target)) {
+        closeSuggestions();
+      }
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, [containerRef, closeSuggestions]);
 }
 
-function computeNextKeyState(
-  key: string,
-  state: SearchState,
-): { readonly nextState?: SearchState; readonly selected?: LocationSearchItem } | undefined {
-  const { results, isOpen, activeIndex } = state;
-  if (key === 'Escape') return { nextState: { ...state, isOpen: false, activeIndex: -1 } };
-  if (!isOpen || results.length === 0) return undefined;
-  const nextIdx = resolveNextIndex(key, activeIndex, results.length);
-  if (nextIdx !== undefined) {
-    return { nextState: { ...state, activeIndex: nextIdx } };
-  }
-  if (key === 'Enter') {
-    const chosen = results[activeIndex];
-    return chosen !== undefined ? { selected: chosen } : undefined;
-  }
-  return undefined;
-}
-
-function useGeolocationTrigger(
-  isHindi: boolean,
-  commitSelection: (item: LocationSearchItem) => void,
-  setIsLocating: Dispatch<SetStateAction<boolean>>,
-  setStatusMessage: Dispatch<SetStateAction<string>>,
-): () => void {
-  return useCallback(() => {
-    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
-      setStatusMessage(isHindi ? 'जियोलोकेशन उपलब्ध नहीं है।' : 'Geolocation is not supported.');
-      return;
-    }
-    setIsLocating(true);
-    setStatusMessage(isHindi ? 'आपकी लोकेशन जांची जा रही है...' : 'Detecting your location...');
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setIsLocating(false);
-        const lat = Math.round(pos.coords.latitude * 10000) / 10000;
-        const lon = Math.round(pos.coords.longitude * 10000) / 10000;
-        if (!isWithinIndiaCoords(lat, lon)) {
-          setStatusMessage(isHindi ? 'निर्देशांक भारत से बाहर हैं।' : 'Coordinates outside India.');
-          return;
-        }
-        commitSelection({
-          id: `gps_${String(lat)}_${String(lon)}`,
-          name: isHindi ? 'मेरी वर्तमान लोकेशन' : 'Current Location',
-          state: 'India',
-          lat,
-          lon,
-        });
-      },
-      (err) => {
-        setIsLocating(false);
-        setStatusMessage(resolveGeoErrorMessage(err, isHindi));
-      },
-      { enableHighAccuracy: false, timeout: GEO_TIMEOUT_MS, maximumAge: 60000 },
-    );
-  }, [isHindi, commitSelection, setIsLocating, setStatusMessage]);
-}
-
-export interface LocationComboboxController {
+/** Return contract for the useLocationCombobox controller hook. */
+interface LocationComboboxController {
   readonly containerRef: RefObject<HTMLDivElement | null>;
   readonly query: string;
   readonly searchState: SearchState;
   readonly isLocating: boolean;
   readonly statusMessage: string;
-  readonly setQuery: Dispatch<SetStateAction<string>>;
+  readonly changeQuery: (value: string) => void;
+  readonly closeSuggestions: () => void;
   readonly handleFocusInput: () => void;
   readonly handleInputKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   readonly handleUseMyLocation: () => void;
   readonly commitSelection: (item: LocationSearchItem) => void;
 }
 
+function useSyncCustomLocation(
+  customLocation: CustomLocation | undefined,
+  suppressedQueryRef: MutableRefObject<string | null>,
+  setQuery: Dispatch<SetStateAction<string>>,
+  setSearchState: Dispatch<SetStateAction<SearchState>>,
+): void {
+  useEffect(() => {
+    const formatted = customLocation !== undefined ? formatDisplayLocation(customLocation) : '';
+    suppressedQueryRef.current = formatted;
+    setQuery(formatted);
+    setSearchState(INITIAL_SEARCH_STATE);
+  }, [customLocation, suppressedQueryRef, setQuery, setSearchState]);
+}
+
+function useSuggestionControls(
+  query: string,
+  setQuery: Dispatch<SetStateAction<string>>,
+  setSearchState: Dispatch<SetStateAction<SearchState>>,
+  setStatusMessage: Dispatch<SetStateAction<string>>,
+) {
+  const canOpenRef = useRef(true);
+  const closeSuggestions = useCallback(() => {
+    canOpenRef.current = false;
+    setSearchState((prev) => ({ ...prev, isOpen: false, activeIndex: -1 }));
+  }, [setSearchState]);
+  const handleFocusInput = useCallback(() => {
+    canOpenRef.current = true;
+    setSearchState((prev) =>
+      prev.resultQuery === query && prev.results.length > 0 ? { ...prev, isOpen: true } : prev,
+    );
+  }, [query, setSearchState]);
+  const changeQuery = useCallback((value: string) => {
+    canOpenRef.current = true;
+    setQuery(value);
+    setStatusMessage('');
+  }, [setQuery, setStatusMessage]);
+  return { canOpenRef, changeQuery, closeSuggestions, handleFocusInput };
+}
+
+function useSuggestionKeyboard(
+  query: string,
+  searchState: SearchState,
+  closeSuggestions: () => void,
+  commitSelection: (item: LocationSearchItem) => void,
+  setSearchState: Dispatch<SetStateAction<SearchState>>,
+) {
+  return useCallback((event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Tab') {
+      closeSuggestions();
+      return;
+    }
+    if (event.key === 'Escape') {
+      closeSuggestions();
+      event.preventDefault();
+      return;
+    }
+    if (searchState.resultQuery !== query) return;
+    const outcome = computeNextKeyState(event.key, searchState);
+    if (outcome === undefined) return;
+    event.preventDefault();
+    if (outcome.nextState !== undefined) setSearchState(outcome.nextState);
+    if (outcome.selected !== undefined) commitSelection(outcome.selected);
+  }, [query, searchState, closeSuggestions, commitSelection, setSearchState]);
+}
+
+/** Manages WAI-ARIA 1.2 combobox search, keyboard navigation, and India geolocation. */
 export function useLocationCombobox(
   isHindi: boolean,
   customLocation: CustomLocation | undefined,
   onSelectLocation: (item: LocationSearchItem) => void,
 ): LocationComboboxController {
   const containerRef = useRef<HTMLDivElement>(null);
-  const skipNextSearchRef = useRef<boolean>(false);
-  const [query, setQuery] = useState<string>(() =>
-    customLocation !== undefined ? formatDisplayLocation(customLocation) : '',
-  );
+  const initialDisplay = customLocation !== undefined ? formatDisplayLocation(customLocation) : '';
+  const suppressedQueryRef = useRef<string | null>(initialDisplay);
+  const [query, setQuery] = useState<string>(initialDisplay);
   const [searchState, setSearchState] = useState<SearchState>(INITIAL_SEARCH_STATE);
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>('');
 
-  useEffect(() => {
-    skipNextSearchRef.current = true;
-    setQuery(customLocation !== undefined ? formatDisplayLocation(customLocation) : '');
-    setSearchState(INITIAL_SEARCH_STATE);
-  }, [customLocation]);
-  useDebouncedLocationSearch(query, skipNextSearchRef, setSearchState);
-  useEffect(() => {
-    const onDocDown = (event: MouseEvent): void => {
-      const target = event.target as Node | null;
-      const el = containerRef.current;
-      if (el !== null && target !== null && !el.contains(target)) {
-        setSearchState((prev) => ({ ...prev, isOpen: false, activeIndex: -1 }));
-      }
-    };
-    document.addEventListener('mousedown', onDocDown);
-    return () => document.removeEventListener('mousedown', onDocDown);
-  }, []);
+  const { canOpenRef, ...controls } = useSuggestionControls(
+    query, setQuery, setSearchState, setStatusMessage,
+  );
+  useSyncCustomLocation(customLocation, suppressedQueryRef, setQuery, setSearchState);
+  useDebouncedLocationSearch(
+    query, isHindi, suppressedQueryRef, canOpenRef, setSearchState, setStatusMessage,
+  );
+  const { closeSuggestions } = controls;
+  useOutsideDismiss(containerRef, closeSuggestions);
 
-  const handleFocusInput = useCallback(() => {
-    setSearchState((prev) => (prev.results.length > 0 ? { ...prev, isOpen: true } : prev));
-  }, []);
   const commitSelection = useCallback((item: LocationSearchItem) => {
-    skipNextSearchRef.current = true;
-    setQuery(`${item.name}, ${item.state}`);
+    const display = formatDisplayLocation(item);
+    suppressedQueryRef.current = display;
+    setQuery(display);
     setSearchState(INITIAL_SEARCH_STATE);
-    setStatusMessage(isHindi ? `${item.name}, ${item.state} चुना गया` : `Selected ${item.name}, ${item.state}`);
+    setStatusMessage(isHindi ? `${display} चुना गया` : `Selected ${display}`);
     onSelectLocation(item);
   }, [isHindi, onSelectLocation]);
-  const handleInputKeyDown = useCallback((event: KeyboardEvent<HTMLInputElement>) => {
-    const outcome = computeNextKeyState(event.key, searchState);
-    if (outcome === undefined) return;
-    event.preventDefault();
-    if (outcome.nextState !== undefined) setSearchState(outcome.nextState);
-    if (outcome.selected !== undefined) commitSelection(outcome.selected);
-  }, [searchState, commitSelection]);
+
+  const handleInputKeyDown = useSuggestionKeyboard(
+    query, searchState, closeSuggestions, commitSelection, setSearchState,
+  );
+
   const handleUseMyLocation = useGeolocationTrigger(
-    isHindi, commitSelection, setIsLocating, setStatusMessage,
+    isHindi,
+    commitSelection,
+    setIsLocating,
+    setStatusMessage,
   );
 
   return {
-    containerRef, query, searchState, isLocating, statusMessage,
-    setQuery, handleFocusInput, handleInputKeyDown, handleUseMyLocation, commitSelection,
+    containerRef,
+    query,
+    searchState,
+    isLocating,
+    statusMessage,
+    ...controls,
+    handleInputKeyDown,
+    handleUseMyLocation,
+    commitSelection,
   };
 }

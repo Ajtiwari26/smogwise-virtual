@@ -4,7 +4,7 @@
 
 import type { RequestHandler } from 'express';
 
-export const FORBIDDEN_JSON_KEYS: ReadonlySet<string> = new Set([
+const FORBIDDEN_JSON_KEYS: ReadonlySet<string> = new Set([
   '__proto__',
   'constructor',
   'prototype',
@@ -14,6 +14,30 @@ const MAX_JSON_DEPTH = 8;
 
 type PayloadViolation = 'depth' | 'forbidden_key';
 
+function inspectArray(items: readonly unknown[], depth: number): PayloadViolation | null {
+  for (const item of items) {
+    const violation = inspectValue(item, depth + 1);
+    if (violation !== null) {
+      return violation;
+    }
+  }
+  return null;
+}
+
+function inspectObject(obj: object, depth: number): PayloadViolation | null {
+  for (const key of Object.getOwnPropertyNames(obj)) {
+    if (FORBIDDEN_JSON_KEYS.has(key)) {
+      return 'forbidden_key';
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(obj, key);
+    const violation = inspectValue(descriptor?.value, depth + 1);
+    if (violation !== null) {
+      return violation;
+    }
+  }
+  return null;
+}
+
 function inspectValue(value: unknown, depth: number): PayloadViolation | null {
   if (typeof value !== 'object' || value === null) {
     return null;
@@ -22,25 +46,9 @@ function inspectValue(value: unknown, depth: number): PayloadViolation | null {
     return 'depth';
   }
   if (Array.isArray(value)) {
-    for (const item of value) {
-      const violation = inspectValue(item, depth + 1);
-      if (violation !== null) {
-        return violation;
-      }
-    }
-    return null;
+    return inspectArray(value, depth);
   }
-  const record = value as Record<string, unknown>;
-  for (const key of Object.getOwnPropertyNames(record)) {
-    if (FORBIDDEN_JSON_KEYS.has(key)) {
-      return 'forbidden_key';
-    }
-    const violation = inspectValue(record[key], depth + 1);
-    if (violation !== null) {
-      return violation;
-    }
-  }
-  return null;
+  return inspectObject(value, depth);
 }
 
 /**

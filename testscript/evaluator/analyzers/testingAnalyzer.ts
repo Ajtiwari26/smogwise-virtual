@@ -1,26 +1,23 @@
+/**
+ * Deterministic testing and coverage reliability analyzer for SmogWise Virtual.
+ */
+
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AnalyzerResult, DeductionItem } from '../types.js';
-import { clamp, makeDeduction, round2, runShellCapture } from '../utils.js';
+import { clamp, isPlainRecord, makeDeduction, round2, runShellCapture } from '../utils.js';
 
 const MAX_SCORE = 4.0;
 const TEST_SUBDIRS = ['unit', 'integration', 'security', 'a11y'] as const;
+const MIN_DOMAIN_LINE_PCT = 90;
+const MIN_DOMAIN_STMT_PCT = 90;
+const MIN_BRANCH_PCT = 85;
 
 interface VitestJsonReport {
-  readonly numFailedTests?: number;
-  readonly numPendingTests?: number;
-  readonly numTodoTests?: number;
-  readonly numPassedTests?: number;
-  readonly success?: boolean;
-}
-
-interface CoverageMetric {
-  readonly pct?: number;
-}
-
-interface CoverageFileEntry {
-  readonly lines?: CoverageMetric;
-  readonly statements?: CoverageMetric;
+  readonly numFailedTests: number;
+  readonly numPendingTests: number;
+  readonly numTodoTests: number;
+  readonly numPassedTests: number;
 }
 
 async function walkTestDir(dirPath: string): Promise<readonly string[]> {
@@ -36,7 +33,8 @@ async function walkTestDir(dirPath: string): Promise<readonly string[]> {
       }
     }
     return found;
-  } catch {
+  } catch (err: unknown) {
+    void err;
     return [];
   }
 }
@@ -50,16 +48,27 @@ async function discoverAppTests(rootDir: string): Promise<readonly string[]> {
   return all;
 }
 
+function readNum(rec: Record<string, unknown>, key: string): number {
+  const val = rec[key];
+  return typeof val === 'number' && Number.isFinite(val) ? val : 0;
+}
+
 function extractVitestReport(rawJson: string): VitestJsonReport | null {
   try {
     const parsed: unknown = JSON.parse(rawJson);
-    if (typeof parsed === 'object' && parsed !== null && 'numPassedTests' in parsed) {
-      return parsed as VitestJsonReport;
+    if (!isPlainRecord(parsed) || !('numPassedTests' in parsed)) {
+      return null;
     }
-  } catch {
+    return {
+      numFailedTests: readNum(parsed, 'numFailedTests'),
+      numPendingTests: readNum(parsed, 'numPendingTests'),
+      numTodoTests: readNum(parsed, 'numTodoTests'),
+      numPassedTests: readNum(parsed, 'numPassedTests'),
+    };
+  } catch (err: unknown) {
+    void err;
     return null;
   }
-  return null;
 }
 
 function parseVitestJson(raw: string): VitestJsonReport | null {
@@ -81,31 +90,84 @@ async function readVitestReport(rootDir: string, stdout: string): Promise<Vitest
   try {
     const fileRaw = await readFile(join(rootDir, '.vitest', 'json', 'output.json'), 'utf8');
     return parseVitestJson(fileRaw);
-  } catch {
+  } catch (err: unknown) {
+    void err;
     return null;
   }
 }
 
-async function checkDomainCoverage(rootDir: string): Promise<readonly DeductionItem[]> {
-  const covPath = join(rootDir, 'coverage', 'coverage-summary.json');
-  let raw: string;
-  try {
-    raw = await readFile(covPath, 'utf8');
-  } catch {
-    return [];
+function readMetricPct(entry: Record<string, unknown>, key: string): number {
+  const metric = entry[key];
+  if (isPlainRecord(metric) && typeof metric['pct'] === 'number' && Number.isFinite(metric['pct'])) {
+    return metric['pct'];
   }
-  const parsed = JSON.parse(raw) as Record<string, CoverageFileEntry>;
-  const domainEntries = Object.entries(parsed).filter(([k]) =>
-    k.replace(/\\/g, '/').includes('src/domain/'),
-  );
-  if (domainEntries.length === 0) return [];
-  const lowFiles = domainEntries.filter(([, entry]) => {
-    const pct = entry.lines?.pct ?? entry.statements?.pct ?? 100;
-    return pct < 90;
+  return 0;
+}
+
+function evaluateCoverageEntries(parsed: Record<string, unknown>): readonly DeductionItem[] {
+  const deductions: DeductionItem[] = [];
+  const total = parsed['total'];
+  if (isPlainRecord(total) && readMetricPct(total, 'branches') < MIN_BRANCH_PCT) {
+    deductions.push(
+      makeDeduction(
+        'testing',
+        0.5,
+        `Total branch coverage ${readMetricPct(total, 'branches')}% below ${MIN_BRANCH_PCT}%.`,
+        'Add tests covering conditional error/fallback branches.',
+      ),
+    );
+  }
+  const lowDomainFiles = Object.entries(parsed).filter(([k, val]) => {
+    if (!k.replace(/\\/g, '/').includes('src/domain/') || !isPlainRecord(val)) {
+      return false;
+    }
+    return (
+      readMetricPct(val, 'lines') < MIN_DOMAIN_LINE_PCT ||
+      readMetricPct(val, 'statements') < MIN_DOMAIN_STMT_PCT ||
+      readMetricPct(val, 'branches') < MIN_BRANCH_PCT
+    );
   });
-  if (lowFiles.length === 0) return [];
-  const msg = `${lowFiles.length} src/domain/ file(s) below 90% coverage`;
-  return [makeDeduction('testing', 1.0, msg, 'coverage/coverage-summary.json')];
+  if (lowDomainFiles.length > 0) {
+    deductions.push(
+      makeDeduction(
+        'testing',
+        1.0,
+        `${lowDomainFiles.length} src/domain/ file(s) below 90%/85% line/branch coverage`,
+        'coverage/coverage-summary.json',
+      ),
+    );
+  }
+  return deductions;
+}
+
+/** Verifies generated coverage-summary.json metrics for total branches and src/domain/. */
+export async function checkDomainCoverage(rootDir: string): Promise<readonly DeductionItem[]> {
+  const covPath = join(rootDir, 'coverage', 'coverage-summary.json');
+  try {
+    const raw = await readFile(covPath, 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPlainRecord(parsed)) {
+      return [
+        makeDeduction(
+          'testing',
+          0.75,
+          'coverage/coverage-summary.json is not a valid JSON object.',
+          'Configure vitest json-summary coverage reporter.',
+        ),
+      ];
+    }
+    return evaluateCoverageEntries(parsed);
+  } catch (err: unknown) {
+    void err;
+    return [
+      makeDeduction(
+        'testing',
+        0.75,
+        'coverage/coverage-summary.json missing or unreadable; coverage unverified.',
+        'Run vitest with --coverage.reporter=json-summary.',
+      ),
+    ];
+  }
 }
 
 function buildEmptyTestResult(): AnalyzerResult {
@@ -156,11 +218,16 @@ async function buildPassingTestResult(
   };
 }
 
+/** Runs Vitest with JSON + json-summary coverage and grades test health and branch coverage. */
 export async function runTestingAnalyzer(rootDir: string): Promise<AnalyzerResult> {
   const testFiles = await discoverAppTests(rootDir);
   if (testFiles.length === 0) return buildEmptyTestResult();
   const vitestBin = join(rootDir, 'node_modules', '.bin', 'vitest');
-  const res = await runShellCapture(vitestBin, ['run', '--reporter=json', '--coverage'], rootDir);
+  const res = await runShellCapture(
+    vitestBin,
+    ['run', '--reporter=json', '--coverage', '--coverage.reporter=json-summary'],
+    rootDir,
+  );
   const report = await readVitestReport(rootDir, res.stdout);
   const failed = report?.numFailedTests ?? (res.code === 0 ? 0 : 1);
   if (failed > 0 || res.code !== 0) {

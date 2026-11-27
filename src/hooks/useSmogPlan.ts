@@ -16,17 +16,20 @@ import type {
 } from '../domain/types.js';
 import type { PlanBriefingApiResponse } from '../services/apiClient.js';
 import {
+  type AqErrorCode,
   type AqMeta,
   buildCustomLocation,
   DEFAULT_RWA_ADOPTION_RATE,
   DEFAULT_RWA_HOUSEHOLDS,
+  formatAqErrorCode,
   stripCustomLocation,
   useDebouncedAqSync,
   useDebouncedBriefingSync,
   useDebouncedPlanSync,
 } from './useSmogPlanHelpers.js';
 
-export type { AqMeta };
+/** Re-exported air-quality metadata type for plan consumers. */
+export type { AqMeta } from './useSmogPlanHelpers.js';
 
 /** Default initial household profile for Delhi winter smog. */
 export const DEFAULT_PROFILE: UserProfile = {
@@ -82,25 +85,62 @@ interface ActionSetters {
   readonly setBriefing: Dispatch<SetStateAction<PlanBriefingApiResponse | undefined>>;
   readonly setLiveAq: Dispatch<SetStateAction<LiveAqOverride | undefined>>;
   readonly setAqMeta: Dispatch<SetStateAction<AqMeta | undefined>>;
-  readonly setAqiError: Dispatch<SetStateAction<string | undefined>>;
+  readonly setAqiErrorCode: Dispatch<SetStateAction<AqErrorCode | undefined>>;
 }
 
-function useProfileActions(setters: ActionSetters): ProfileActions {
-  const { setProfile, setSyncedPlan, setBriefing, setLiveAq, setAqMeta, setAqiError } = setters;
-
-  const clearRemoteState = useCallback(() => {
+function useClearRemoteState(setters: ActionSetters): () => void {
+  const { setSyncedPlan, setBriefing, setLiveAq, setAqMeta, setAqiErrorCode } = setters;
+  return useCallback(() => {
     setSyncedPlan(undefined);
     setBriefing(undefined);
     setLiveAq(undefined);
     setAqMeta(undefined);
-    setAqiError(undefined);
-  }, [setSyncedPlan, setBriefing, setLiveAq, setAqMeta, setAqiError]);
+    setAqiErrorCode(undefined);
+  }, [setSyncedPlan, setBriefing, setLiveAq, setAqMeta, setAqiErrorCode]);
+}
+
+function useProfileLocationActions(
+  setProfile: Dispatch<SetStateAction<UserProfile>>,
+  clearRemoteState: () => void,
+): Pick<
+  ProfileActions,
+  'selectLocation' | 'selectPresetCity' | 'applySampleScenario'
+> {
+  const selectLocation = useCallback((item: LocationSearchItem) => {
+    clearRemoteState();
+    setProfile((prev) => ({ ...prev, customLocation: buildCustomLocation(item) }));
+  }, [clearRemoteState, setProfile]);
+
+  const selectPresetCity = useCallback((cityId: string) => {
+    clearRemoteState();
+    setProfile((prev) => stripCustomLocation(prev, cityId));
+  }, [clearRemoteState, setProfile]);
+
+  const applySampleScenario = useCallback((scenarioProfile: UserProfile) => {
+    clearRemoteState();
+    setProfile({ ...scenarioProfile });
+  }, [clearRemoteState, setProfile]);
+
+  return { selectLocation, selectPresetCity, applySampleScenario };
+}
+
+function useProfileActions(setters: ActionSetters, profile: UserProfile): ProfileActions {
+  const { setProfile, setSyncedPlan, setBriefing } = setters;
+  const { cityId, customLocation } = profile;
+  const clearRemoteState = useClearRemoteState(setters);
+  const locationActions = useProfileLocationActions(setProfile, clearRemoteState);
 
   const updateProfile = useCallback((patch: Partial<UserProfile>) => {
-    setSyncedPlan(undefined);
-    setBriefing(undefined);
+    const cityChanged = patch.cityId !== undefined && patch.cityId !== cityId;
+    const customChanged = 'customLocation' in patch && patch.customLocation !== customLocation;
+    if (cityChanged || customChanged) {
+      clearRemoteState();
+    } else {
+      setSyncedPlan(undefined);
+      setBriefing(undefined);
+    }
     setProfile((prev) => ({ ...prev, ...patch }));
-  }, [setSyncedPlan, setBriefing, setProfile]);
+  }, [cityId, customLocation, clearRemoteState, setSyncedPlan, setBriefing, setProfile]);
 
   const toggleHack = useCallback((hackId: IAQHackId) => {
     setSyncedPlan(undefined);
@@ -120,21 +160,6 @@ function useProfileActions(setters: ActionSetters): ProfileActions {
     setProfile((prev) => ({ ...prev, language }));
   }, [setSyncedPlan, setBriefing, setProfile]);
 
-  const selectLocation = useCallback((item: LocationSearchItem) => {
-    clearRemoteState();
-    setProfile((prev) => ({ ...prev, customLocation: buildCustomLocation(item) }));
-  }, [clearRemoteState, setProfile]);
-
-  const selectPresetCity = useCallback((cityId: string) => {
-    clearRemoteState();
-    setProfile((prev) => stripCustomLocation(prev, cityId));
-  }, [clearRemoteState, setProfile]);
-
-  const applySampleScenario = useCallback((scenarioProfile: UserProfile) => {
-    clearRemoteState();
-    setProfile({ ...scenarioProfile });
-  }, [clearRemoteState, setProfile]);
-
   const updateRwaHouseholds = useCallback((rwaHouseholds: number) => {
     setSyncedPlan(undefined);
     setProfile((prev) => ({ ...prev, rwaHouseholds }));
@@ -149,9 +174,7 @@ function useProfileActions(setters: ActionSetters): ProfileActions {
     updateProfile,
     toggleHack,
     setLanguage,
-    selectLocation,
-    selectPresetCity,
-    applySampleScenario,
+    ...locationActions,
     updateRwaHouseholds,
     updateRwaAdoptionRate,
   };
@@ -165,9 +188,9 @@ export function useSmogPlan(initialOverrides?: Partial<UserProfile>): UseSmogPla
   }));
   const [liveAq, setLiveAq] = useState<LiveAqOverride | undefined>(undefined);
   const [aqMeta, setAqMeta] = useState<AqMeta | undefined>(undefined);
-  const [aqiError, setAqiError] = useState<string | undefined>(undefined);
+  const [aqiErrorCode, setAqiErrorCode] = useState<AqErrorCode | undefined>(undefined);
   const [syncedPlan, setSyncedPlan] = useState<FullPlanOutput | undefined>(undefined);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isAqSyncing, setIsAqSyncing] = useState<boolean>(false);
   const [briefing, setBriefing] = useState<PlanBriefingApiResponse | undefined>(undefined);
   const [isBriefingLoading, setIsBriefingLoading] = useState<boolean>(false);
   const aqGenRef = useRef<number>(0);
@@ -180,15 +203,19 @@ export function useSmogPlan(initialOverrides?: Partial<UserProfile>): UseSmogPla
     document.documentElement.lang = profile.language;
   }, [profile.language]);
 
-  useDebouncedAqSync(profile, { generationRef: aqGenRef, setLiveAq, setAqMeta, setAqiError });
-  useDebouncedPlanSync(
-    profile,
-    { generationRef: planGenRef, setSyncedPlan, setIsSyncing, setAqiError },
-  );
-  useDebouncedBriefingSync(
-    profile,
-    { generationRef: briefingGenRef, setBriefing, setIsBriefingLoading },
-  );
+  useDebouncedAqSync(profile, {
+    generationRef: aqGenRef,
+    setLiveAq,
+    setAqMeta,
+    setAqiErrorCode,
+    setIsAqSyncing,
+  });
+  useDebouncedPlanSync(profile, { generationRef: planGenRef, setSyncedPlan, setAqiErrorCode });
+  useDebouncedBriefingSync(profile, {
+    generationRef: briefingGenRef,
+    setBriefing,
+    setIsBriefingLoading,
+  });
 
   const actions = useProfileActions({
     setProfile,
@@ -196,16 +223,16 @@ export function useSmogPlan(initialOverrides?: Partial<UserProfile>): UseSmogPla
     setBriefing,
     setLiveAq,
     setAqMeta,
-    setAqiError,
-  });
+    setAqiErrorCode,
+  }, profile);
 
   return {
     profile,
     plan: syncedPlan ?? instantPlan,
     liveAq,
     aqMeta,
-    aqiError,
-    isSyncing,
+    aqiError: formatAqErrorCode(aqiErrorCode, profile.language),
+    isSyncing: isAqSyncing,
     briefing,
     isBriefingLoading,
     ...actions,

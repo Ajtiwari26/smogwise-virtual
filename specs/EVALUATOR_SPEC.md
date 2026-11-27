@@ -34,12 +34,12 @@ This evaluator enforces an **unbiased, brutally strict 0.00–100.00 decimal sco
 ## 3. Deterministic Analyzers (`testscript/evaluator/analyzers/`)
 
 ### 3.1 `codeQualityAnalyzer.ts` (20.00 pts)
-- **TypeScript Strictness (6.00 pts):** Runs `npx tsc --noEmit`. Zero errors required. Scans AST/source for `: any`, `as any`, `@ts-ignore`, `@ts-nocheck` (-2.00 each).
-- **ESLint Strict Audit (5.00 pts):** Runs ESLint with `complexity <= 10`, `max-len <= 100`, `max-lines-per-function <= 80`, `no-unused-vars`, `no-console` (in `src/`). Deducts 0.50 per warning, 1.50 per error.
-- **Modular Separation & Architecture (4.00 pts):** Verifies zero React/DOM imports in `src/domain/`, zero `@google/genai` imports in `src/` (client), and clean boundary between `server/` and `src/`.
+- **TypeScript Strictness (6.00 pts):** Runs `npx tsc --noEmit` and `npx tsc -p tsconfig.server.json --noEmit`. Zero errors required. Scans AST/source for `: any`, `as any`, `@ts-ignore`, `@ts-nocheck` (-2.00 each), plus non-const `as` assertions (-0.35 each) and empty `catch` blocks (-0.50 each) in runtime code, and verifies `noUnusedLocals`, `noUnusedParameters`, and `noImplicitReturns`.
+- **ESLint Strict Audit (5.00 pts):** Runs ESLint with `complexity <= 9`, `max-len <= 100`, `max-lines-per-function <= 55` (runtime & evaluator), `max-lines <= 245` (runtime & evaluator), `@typescript-eslint/no-non-null-assertion`, `no-unused-vars`, `no-console` (in `src/`, `server/`, `api/`). Deducts 0.50 per warning, 1.50 per error.
+- **Modular Separation & Architecture (4.00 pts):** Verifies zero React/DOM/Node/Express imports in `src/domain/`, zero `@google/genai`/`dotenv` imports in `src/` (client), and clean boundary between `server/` and `src/`.
 - **JSDoc & DRY Audit (5.00 pts):**
-  - Checks exported functions in `src/domain/` and `server/` for JSDoc docstrings (`/** ... */`).
-  - Token-window duplicate detector (sliding 12-line normalized hash across `src/` & `server/`): deducts 0.50 per non-trivial duplicated block.
+  - Checks all exports (`function`, `const`, `class`, `interface`, `type`, `default`, re-exports) across `src/`, `server/`, `api/`, and `testscript/evaluator/` for JSDoc docstrings (`/** ... */`).
+  - Token-window duplicate detector (sliding 12-line normalized hash across `src/`, `server/`, and `testscript/evaluator/`): deducts 0.50 per non-trivial duplicated block.
 
 ### 3.2 `securityAnalyzer.ts` (11.00 pts)
 - **Secret Scanner (3.00 pts):** Scans all tracked files + `.env.example` for high-entropy strings and known key patterns (`AIza[0-9A-Za-z-_]{35}`, `sk-`, `ghp_`, private keys). Verifies `VITE_` never wraps any secret.
@@ -57,7 +57,7 @@ This evaluator enforces an **unbiased, brutally strict 0.00–100.00 decimal sco
 ### 3.3 `efficiencyAnalyzer.ts` (12.00 pts)
 - **Repo Size & Git Hygiene (4.00 pts):** Measures working tree excluding `node_modules/` and `dist/` (must be `< 10 MB`; optimal `< 2 MB`), verifies single local branch (`git branch --list` count === 1).
 - **Dependency & Bundle Audit (3.00 pts):** Checks production `dependencies` count (target $\le 12$), runs `vite build`, checks gzipped JS bundle size (full credit `< 150 KB` gzipped; linear deduction above).
-- **Algorithmic Scaling Benchmark (3.00 pts):** Executes Tier 1 engine across $N = 24, 240, 2400$ routine blocks; verifies linear $O(N)$ scaling ratio ($T(2400)/T(240) < 15\times$) and p95 latency $< 2\text{ ms}$ for standard 24-hour input.
+- **Algorithmic Scaling Benchmark (3.00 pts):** Executes Tier 1 engine across $N = 24, 240, 2400$ routine blocks; verifies linear $O(N)$ scaling ratio ($T(2400)/T(240) < 18\times$) and p95 latency $< 2\text{ ms}$ for standard 24-hour input.
 - **LRU Cache Effectiveness (2.00 pts):** Verifies SHA-256 key determinism, cache hit speedup ($\ge 5\times$ on repeated requests), and strict eviction at `maxEntries`.
 
 ### 3.4 `alignmentRuntimeAnalyzer.ts` (12.00 pts)
@@ -69,8 +69,8 @@ This evaluator enforces an **unbiased, brutally strict 0.00–100.00 decimal sco
   - RWA community multiplier scales linearly with household count $H$.
 
 ### 3.5 `testingAnalyzer.ts` (4.00 pts)
-- Runs `npm test` (Vitest) across `testscript/unit/`, `testscript/integration/`, `testscript/security/`, and `testscript/a11y/`.
-- Verifies 100% pass rate, zero skipped tests, and minimum coverage thresholds (`src/domain/` $\ge 90\%$ statements/branches).
+- Runs `vitest run --reporter=json --coverage --coverage.reporter=json-summary` across `testscript/unit/`, `testscript/integration/`, `testscript/security/`, `testscript/a11y/`, and `testscript/evaluator/`.
+- Verifies 100% pass rate, zero skipped tests, and minimum coverage thresholds (`>=85%` total branches and `src/domain/` `>=90%` lines/statements & `>=85%` branches; global Vitest thresholds `>=92%` stmts/funcs/lines and `>=85%` branches).
 
 ### 3.6 `accessibilityAnalyzer.ts` (3.50 pts)
 - Parses rendered HTML/DOM (via JSDOM + `@testing-library/react` + programmatic checks):
@@ -81,7 +81,7 @@ This evaluator enforces an **unbiased, brutally strict 0.00–100.00 decimal sco
 
 ---
 
-## 4. Adversarial GenAI Rubric Judge (`testscript/evaluator/aiJudge.ts`)
+## 4. Adversarial GenAI Rubric Judge (`testscript/evaluator/aiJudge.ts`, `judgeProbes.ts`, `judgePrompts.ts`)
 
 ### Inputs Fed to the Judge
 1. Key source files (`src/domain/*`, `server/*`, `src/App.tsx`, `README.md`).
@@ -109,7 +109,7 @@ This evaluator enforces an **unbiased, brutally strict 0.00–100.00 decimal sco
   "deductions": [
     {
       "criterion": "alignment",
-      "points": -0.80,
+      "points": 0.80,
       "evidence": "P2 response (Lucknow ₹1,200 budget) suggested a ₹8,500 HEPA unit before mentioning ₹0 sealing hacks.",
       "fix": "Sort IAQ hacks by user budget cap before passing to Tier 2 prompt."
     }

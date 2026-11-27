@@ -14,12 +14,14 @@ export interface EnvConfig {
   readonly geminiApiKey: string;
   readonly nodeEnv: string;
   readonly authSecret: string;
+  readonly trustProxy: boolean;
 }
 
 const DEFAULT_PORT = 3001;
 const DEFAULT_ALLOWED_ORIGIN = 'http://localhost:5173';
-const MIN_AUTH_SECRET_LENGTH = 16;
+const MIN_AUTH_SECRET_LENGTH = 32;
 const FALLBACK_AUTH_SECRET = crypto.randomBytes(32).toString('hex');
+let warnedEphemeralSecret = false;
 
 function parsePort(raw: string | undefined): number {
   if (raw === undefined || raw.trim().length === 0) {
@@ -32,32 +34,44 @@ function parsePort(raw: string | undefined): number {
   return parsed;
 }
 
-function resolveAuthSecret(raw: string | undefined): string {
+function resolveAuthSecret(raw: string | undefined, nodeEnv: string): string {
   const trimmed = raw?.trim();
   if (trimmed !== undefined && trimmed.length >= MIN_AUTH_SECRET_LENGTH) {
     return trimmed;
   }
+  if (nodeEnv === 'production' && !warnedEphemeralSecret) {
+    warnedEphemeralSecret = true;
+    process.emitWarning(
+      'AUTH_SECRET is unset or shorter than 32 characters in production; using an ephemeral per-process secret.',
+      'SecurityWarning',
+    );
+  }
   return FALLBACK_AUTH_SECRET;
+}
+
+function resolveAllowedOrigin(rawOrigin: string | undefined, nodeEnv: string): string {
+  const trimmed = rawOrigin?.trim();
+  if (trimmed !== undefined && trimmed.length > 0) {
+    return trimmed;
+  }
+  return nodeEnv === 'production' ? '' : DEFAULT_ALLOWED_ORIGIN;
+}
+
+function resolveTrustProxy(env: NodeJS.ProcessEnv): boolean {
+  return env['TRUST_PROXY']?.trim() === '1' || env['VERCEL']?.trim() === '1';
 }
 
 /**
  * Returns validated server environment configuration from process.env.
  */
 export function getEnvConfig(): EnvConfig {
-  const port = parsePort(process.env['PORT']);
   const nodeEnv = process.env['NODE_ENV']?.trim() || 'development';
-  const fallbackOrigin = nodeEnv === 'production' ? '' : DEFAULT_ALLOWED_ORIGIN;
-  const rawOrigin = process.env['ALLOWED_ORIGIN']?.trim();
-  const allowedOrigin =
-    rawOrigin !== undefined && rawOrigin.length > 0 ? rawOrigin : fallbackOrigin;
-  const geminiApiKey = process.env['GEMINI_API_KEY']?.trim() ?? '';
-  const authSecret = resolveAuthSecret(process.env['AUTH_SECRET']);
-
   return {
-    port,
-    allowedOrigin,
-    geminiApiKey,
+    port: parsePort(process.env['PORT']),
+    allowedOrigin: resolveAllowedOrigin(process.env['ALLOWED_ORIGIN'], nodeEnv),
+    geminiApiKey: process.env['GEMINI_API_KEY']?.trim() ?? '',
     nodeEnv,
-    authSecret,
+    authSecret: resolveAuthSecret(process.env['AUTH_SECRET'], nodeEnv),
+    trustProxy: resolveTrustProxy(process.env),
   };
 }

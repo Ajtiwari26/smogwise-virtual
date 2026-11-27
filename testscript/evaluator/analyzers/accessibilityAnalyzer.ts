@@ -5,13 +5,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { AnalyzerResult, DeductionItem } from '../types.js';
-import { clamp, listSourceFiles, makeDeduction, round2 } from '../utils.js';
+import { clamp, listSourceFiles, makeDeduction, readFileSafe, round2 } from '../utils.js';
+import { checkColorAndTypography } from './accessibilityContrast.js';
 
 const CRITERION = 'accessibility' as const;
 const MAX_DETERMINISTIC = 3.5;
-const BODY_CONTRAST_MIN = 4.5;
-const UI_CONTRAST_MIN = 3.0;
-const CONTRAST_DEDUCTION = 1.5;
 
 const HTML_CHECKS: readonly { readonly token: string; readonly label: string }[] = [
   { token: 'lang=', label: 'lang attribute on <html>' },
@@ -20,7 +18,6 @@ const HTML_CHECKS: readonly { readonly token: string; readonly label: string }[]
 ];
 
 const LANDMARK_TOKENS: readonly string[] = ['<header', '<main', '<nav', '<footer'];
-
 const AQI_TEXT_LABELS: readonly string[] = [
   'Good',
   'Moderate',
@@ -30,20 +27,6 @@ const AQI_TEXT_LABELS: readonly string[] = [
   'Unhealthy',
 ];
 
-interface ContrastSummary {
-  readonly hexCount: number;
-  readonly bestBodyRatio: number;
-  readonly minUiRatio: number;
-  readonly passed: boolean;
-}
-
-function readFileSafe(filePath: string): string {
-  if (!fs.existsSync(filePath)) {
-    return '';
-  }
-  return fs.readFileSync(filePath, 'utf8');
-}
-
 function countOccurrences(haystack: string, needle: string): number {
   let count = 0;
   let pos = haystack.indexOf(needle);
@@ -52,39 +35,6 @@ function countOccurrences(haystack: string, needle: string): number {
     pos = haystack.indexOf(needle, pos + needle.length);
   }
   return count;
-}
-
-function srgbToLinear(hexPair: string): number {
-  const srgb = Number.parseInt(hexPair, 16) / 255;
-  if (srgb <= 0.03928) {
-    return srgb / 12.92;
-  }
-  return Math.pow((srgb + 0.055) / 1.055, 2.4);
-}
-
-function relativeLuminance(hex: string): number {
-  const clean = hex.slice(1);
-  const r = srgbToLinear(clean.slice(0, 2));
-  const g = srgbToLinear(clean.slice(2, 4));
-  const b = srgbToLinear(clean.slice(4, 6));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
-function contrastRatio(hexA: string, hexB: string): number {
-  const lumA = relativeLuminance(hexA);
-  const lumB = relativeLuminance(hexB);
-  const lighter = Math.max(lumA, lumB);
-  const darker = Math.min(lumA, lumB);
-  return round2((lighter + 0.05) / (darker + 0.05));
-}
-
-function extractUniqueHexColors(source: string): string[] {
-  const pattern = new RegExp('#[0-9a-fA-F]{6}', 'g');
-  const matches = source.match(pattern);
-  if (matches === null) {
-    return [];
-  }
-  return [...new Set(matches.map((hex) => hex.toLowerCase()))];
 }
 
 function checkIndexHtml(html: string, deductions: DeductionItem[]): number {
@@ -107,12 +57,7 @@ function checkIndexHtml(html: string, deductions: DeductionItem[]): number {
 }
 
 function checkLandmarks(tsx: string, deductions: DeductionItem[]): number {
-  const missing: string[] = [];
-  for (const token of LANDMARK_TOKENS) {
-    if (!tsx.includes(token)) {
-      missing.push(token.slice(1));
-    }
-  }
+  const missing = LANDMARK_TOKENS.filter((token) => !tsx.includes(token)).map((t) => t.slice(1));
   if (missing.length > 0) {
     deductions.push(
       makeDeduction(
@@ -153,7 +98,6 @@ function checkSkipAndHeading(tsx: string, deductions: DeductionItem[]): boolean 
 }
 
 function checkInteractiveA11y(tsx: string, deductions: DeductionItem[]): number {
-  let passed = 0;
   const checks: readonly { readonly ok: boolean; readonly ev: string; readonly fix: string }[] = [
     {
       ok: tsx.includes('aria-live'),
@@ -170,13 +114,21 @@ function checkInteractiveA11y(tsx: string, deductions: DeductionItem[]): number 
       ev: 'No keyboard focus ring classes (focus-visible: or focus:ring) found.',
       fix: 'Add focus-visible: or focus:ring styles to interactive controls.',
     },
+    {
+      ok: tsx.includes('aria-invalid') && tsx.includes('aria-describedby'),
+      ev: 'Form error states lack aria-invalid and aria-describedby linkage.',
+      fix: 'Bind aria-invalid and aria-describedby to validation error elements.',
+    },
+    {
+      ok: tsx.includes('role="combobox"') && tsx.includes('scope="col"'),
+      ev: 'Missing WAI-ARIA combobox or accessible data-table column headers.',
+      fix: 'Include role="combobox" on location search and scope="col" on summary table.',
+    },
   ];
+  let passed = 0;
   for (const item of checks) {
-    if (item.ok) {
-      passed += 1;
-    } else {
-      deductions.push(makeDeduction(CRITERION, 0.2, item.ev, item.fix));
-    }
+    if (item.ok) passed += 1;
+    else deductions.push(makeDeduction(CRITERION, 0.2, item.ev, item.fix));
   }
   return passed;
 }
@@ -211,42 +163,6 @@ function checkLangAndAqiLabels(tsx: string, deductions: DeductionItem[]): number
   return passed;
 }
 
-function computeContrastStats(colors: readonly string[]): ContrastSummary {
-  if (colors.length < 2) {
-    return { hexCount: colors.length, bestBodyRatio: 21, minUiRatio: 21, passed: true };
-  }
-  const sorted = [...colors].sort((a, b) => relativeLuminance(a) - relativeLuminance(b));
-  const darkest = sorted[0];
-  const lightest = sorted[sorted.length - 1];
-  if (darkest === undefined || lightest === undefined) {
-    return { hexCount: colors.length, bestBodyRatio: 21, minUiRatio: 21, passed: true };
-  }
-  const bestBodyRatio = contrastRatio(darkest, lightest);
-  const mid = sorted[Math.floor(sorted.length / 2)] ?? darkest;
-  const minUiRatio = Math.max(contrastRatio(mid, lightest), contrastRatio(mid, darkest));
-  const passed = bestBodyRatio >= BODY_CONTRAST_MIN && minUiRatio >= UI_CONTRAST_MIN;
-  return { hexCount: colors.length, bestBodyRatio, minUiRatio, passed };
-}
-
-function checkColorContrast(rootDir: string, deductions: DeductionItem[]): ContrastSummary {
-  const cssText = readFileSafe(path.join(rootDir, 'src', 'index.css'));
-  const twText = readFileSafe(path.join(rootDir, 'tailwind.config.ts'));
-  const colors = extractUniqueHexColors(`${cssText}\n${twText}`);
-  const summary = computeContrastStats(colors);
-  if (!summary.passed) {
-    deductions.push(
-      makeDeduction(
-        CRITERION,
-        CONTRAST_DEDUCTION,
-        `WCAG 2.1 contrast below threshold (body: ${String(summary.bestBodyRatio)}:1, ` +
-          `UI: ${String(summary.minUiRatio)}:1).`,
-        'Ensure body text contrast >= 4.5:1 and UI component contrast >= 3.0:1.',
-      ),
-    );
-  }
-  return summary;
-}
-
 function buildMissingAppResult(): AnalyzerResult {
   return {
     criterion: CRITERION,
@@ -264,15 +180,11 @@ function buildMissingAppResult(): AnalyzerResult {
   };
 }
 
-/**
- * Runs deterministic WCAG 2.1 and semantic accessibility checks on the workspace.
- */
+/** Runs deterministic WCAG 2.1 and semantic accessibility checks on the workspace. */
 export async function runAccessibilityAnalyzer(rootDir: string): Promise<AnalyzerResult> {
-  const appPath = path.join(rootDir, 'src', 'App.tsx');
-  if (!fs.existsSync(appPath)) {
+  if (!fs.existsSync(path.join(rootDir, 'src', 'App.tsx'))) {
     return Promise.resolve(buildMissingAppResult());
   }
-
   const deductions: DeductionItem[] = [];
   const indexHtml = readFileSafe(path.join(rootDir, 'index.html'));
   const tsxFiles = listSourceFiles(path.join(rootDir, 'src'), ['.tsx']);
@@ -285,14 +197,12 @@ export async function runAccessibilityAnalyzer(rootDir: string): Promise<Analyze
   const skipAndH1Ok = checkSkipAndHeading(tsxJoined, deductions);
   const interactivePassed = checkInteractiveA11y(tsxJoined, deductions);
   const langAndAqiPassed = checkLangAndAqiLabels(allSrcJoined, deductions);
-  const contrast = checkColorContrast(rootDir, deductions);
+  const contrast = checkColorAndTypography(rootDir, tsxJoined, deductions);
 
   const totalDeducted = deductions.reduce((sum, item) => sum + item.points, 0);
-  const score = clamp(round2(MAX_DETERMINISTIC - totalDeducted), 0, MAX_DETERMINISTIC);
-
   return Promise.resolve({
     criterion: CRITERION,
-    deterministicScore: score,
+    deterministicScore: clamp(round2(MAX_DETERMINISTIC - totalDeducted), 0, MAX_DETERMINISTIC),
     maxDeterministic: MAX_DETERMINISTIC,
     deductions,
     metrics: {

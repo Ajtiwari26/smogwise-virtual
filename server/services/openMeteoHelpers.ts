@@ -5,6 +5,7 @@
 
 import { CITY_PRESETS } from '../../src/domain/cityPresets.js';
 import { computeCpcbAqi } from '../../src/domain/cpcbAqi.js';
+import { round4 } from '../../src/domain/domainUtils.js';
 import type {
   AqiBandId,
   CityPreset,
@@ -40,7 +41,7 @@ export interface AirQualityLookupResult {
   readonly cached: boolean;
 }
 
-/** Normalizes an Open-Meteo timestamp string into an ISO-8601 IST (+05:30) timestamp. */
+/** Adds IST to offset-free Open-Meteo times and preserves explicit offsets. */
 export function normalizeObservedAt(raw?: string): string | undefined {
   if (raw === undefined) {
     return undefined;
@@ -66,10 +67,11 @@ function toRadians(deg: number): number {
 export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const dLat = toRadians(lat2 - lat1);
   const dLon = toRadians(lon2 - lon1);
-  const a =
+  const rawA =
     Math.sin(dLat / 2) ** 2 +
     Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 2 * EARTH_RADIUS_KM * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const clampedA = Math.min(1, Math.max(0, rawA));
+  return 2 * EARTH_RADIUS_KM * Math.atan2(Math.sqrt(clampedA), Math.sqrt(1 - clampedA));
 }
 
 /** Finds the nearest Indian city preset and its Haversine distance in kilometers. */
@@ -77,7 +79,7 @@ export function findNearestIndianPreset(lat: number, lon: number): {
   readonly preset: CityPreset;
   readonly distanceKm: number;
 } {
-  let nearestPreset = CITY_PRESETS[0] as CityPreset;
+  let nearestPreset: CityPreset | undefined;
   let minDistance = Number.POSITIVE_INFINITY;
   for (const preset of CITY_PRESETS) {
     const dist = haversineKm(lat, lon, preset.lat, preset.lon);
@@ -85,6 +87,9 @@ export function findNearestIndianPreset(lat: number, lon: number): {
       minDistance = dist;
       nearestPreset = preset;
     }
+  }
+  if (nearestPreset === undefined) {
+    throw new Error('CITY_PRESETS must contain at least one preset.');
   }
   return { preset: nearestPreset, distanceKm: minDistance };
 }
@@ -98,8 +103,8 @@ export function buildSyntheticCityPreset(
   const cleanState = sanitizeLocationText(input.state ?? '');
   const displayName = cleanName.length > 0 ? cleanName : `${nearestPreset.name} Area`;
   const displayState = cleanState.length > 0 ? cleanState : nearestPreset.state;
-  const lat = Math.round(input.lat * 10000) / 10000;
-  const lon = Math.round(input.lon * 10000) / 10000;
+  const lat = round4(input.lat);
+  const lon = round4(input.lon);
   return {
     id: `custom_${String(lat)}_${String(lon)}`,
     name: displayName,
@@ -114,6 +119,25 @@ export function buildSyntheticCityPreset(
   };
 }
 
+function buildBaseLookupFields(
+  city: CityPreset,
+  pm25: number,
+  pm10: number | undefined,
+  no2: number | undefined,
+  dataSource: 'live_open_meteo' | 'city_preset',
+) {
+  const cpcb = computeCpcbAqi(pm25, pm10, no2);
+  return {
+    city,
+    dataSource,
+    cpcbAqi: cpcb.aqi,
+    aqiBand: cpcb.band,
+    dominantPollutant: cpcb.dominantPollutant,
+    fetchedAt: new Date().toISOString(),
+    cached: false,
+  };
+}
+
 /** Builds a live or preset AirQualityLookupResult from city metadata and optional live AQ. */
 export function buildLookupResult(
   city: CityPreset,
@@ -122,17 +146,11 @@ export function buildLookupResult(
   const pm25 = liveAq?.pm25 ?? city.baselinePm25;
   const pm10 = liveAq !== null ? liveAq.pm10 : city.baselinePm10;
   const no2 = liveAq !== null ? liveAq.no2 : city.baselineNo2;
-  const cpcb = computeCpcbAqi(pm25, pm10, no2);
+  const dataSource = liveAq !== null ? 'live_open_meteo' : 'city_preset';
   return {
-    city,
-    dataSource: liveAq !== null ? 'live_open_meteo' : 'city_preset',
-    cpcbAqi: cpcb.aqi,
-    aqiBand: cpcb.band,
-    dominantPollutant: cpcb.dominantPollutant,
+    ...buildBaseLookupFields(city, pm25, pm10, no2, dataSource),
     ...(liveAq?.observedAt !== undefined ? { observedAt: liveAq.observedAt } : {}),
     ...(liveAq !== null ? { liveAq } : {}),
-    fetchedAt: new Date().toISOString(),
-    cached: false,
   };
 }
 
@@ -152,21 +170,16 @@ export function buildNearestFallbackResult(
     fallbackStationName: nearestPreset.name,
     fallbackDistanceKm: roundedDist,
   };
-  const cpcb = computeCpcbAqi(
-    nearestPreset.baselinePm25,
-    nearestPreset.baselinePm10,
-    nearestPreset.baselineNo2,
-  );
   return {
-    city: syntheticCity,
-    dataSource: 'city_preset',
-    cpcbAqi: cpcb.aqi,
-    aqiBand: cpcb.band,
-    dominantPollutant: cpcb.dominantPollutant,
+    ...buildBaseLookupFields(
+      syntheticCity,
+      nearestPreset.baselinePm25,
+      nearestPreset.baselinePm10,
+      nearestPreset.baselineNo2,
+      'city_preset',
+    ),
     fallbackStationName: nearestPreset.name,
     fallbackDistanceKm: roundedDist,
     liveAq: fallbackOverride,
-    fetchedAt: new Date().toISOString(),
-    cached: false,
   };
 }

@@ -33,19 +33,22 @@ export function ScenarioPresetBar({
           const isPressed = activeScenarioId === scenario.id;
           const label = isHindi ? scenario.labelHi : scenario.labelEn;
           const btnClass = isPressed
-            ? 'rounded-full border border-emerald-900 bg-emerald-900 px-3 py-1 ' +
-              'text-xs font-semibold text-white shadow-sm'
-            : 'rounded-full border border-slate-400 bg-white px-3 py-1 ' +
-              'text-xs font-semibold text-slate-900 hover:bg-slate-100';
+            ? 'rounded-full border border-emerald-900 bg-emerald-900 px-3 py-1.5 ' +
+              'text-xs font-semibold text-white shadow-sm focus-visible:outline-none ' +
+              'focus-visible:ring-2 focus-visible:ring-teal-700'
+            : 'rounded-full border border-slate-500 bg-white px-3 py-1.5 ' +
+              'text-xs font-semibold text-slate-900 hover:bg-slate-100 ' +
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700';
           return (
             <button
               key={scenario.id}
               type="button"
+              lang={isHindi ? 'hi' : undefined}
               aria-pressed={isPressed}
               onClick={() => onSelectScenario(scenario.id, scenario.profile)}
               className={btnClass}
             >
-              <span lang={scenario.profile.language}>{label}</span>
+              {label}
             </button>
           );
         })}

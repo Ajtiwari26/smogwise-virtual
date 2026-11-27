@@ -19,23 +19,24 @@ function buildPreferenceKey(userId: string): string {
 }
 
 /**
- * Retrieves saved household profile preferences for an authenticated user ID.
+ * Retrieves a cloned copy of saved household profile preferences for an authenticated user ID.
  */
 export function getUserPreferences(userId: string): UserProfile | undefined {
   const normalized = userId.trim();
   if (normalized.length === 0) {
     return undefined;
   }
-  return preferencesCache.get(buildPreferenceKey(normalized));
+  const stored = preferencesCache.get(buildPreferenceKey(normalized));
+  return stored === undefined ? undefined : structuredClone(stored);
 }
 
 /**
- * Persists household profile preferences for an authenticated user ID.
+ * Persists a defensive clone of household profile preferences for an authenticated user ID.
  */
 export function setUserPreferences(userId: string, profile: UserProfile): void {
   const normalized = userId.trim();
   if (normalized.length === 0) {
     return;
   }
-  preferencesCache.set(buildPreferenceKey(normalized), profile);
+  preferencesCache.set(buildPreferenceKey(normalized), structuredClone(profile));
 }

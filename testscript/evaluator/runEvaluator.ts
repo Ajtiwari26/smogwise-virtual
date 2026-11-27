@@ -1,9 +1,8 @@
 /**
- * CLI entrypoint for the SmogWise Virtual hybrid evaluator.
+ * CLI entrypoint and programmatic runner for the SmogWise Virtual hybrid evaluator.
  */
 
 import dotenv from 'dotenv';
-dotenv.config({ override: true });
 import fs from 'node:fs';
 import path from 'node:path';
 import { runAiJudge } from './aiJudge.js';
@@ -23,7 +22,7 @@ import type {
   EvaluationReport,
   ImpactLevel,
 } from './types.js';
-import { clamp, round2 } from './utils.js';
+import { clamp, isMainModule, round2 } from './utils.js';
 
 interface CriterionMeta {
   readonly key: CriterionKey;
@@ -85,7 +84,8 @@ const CRITERIA_META: readonly CriterionMeta[] = [
   },
 ];
 
-function computeBand(score: number): string {
+/** Maps a 0-100 total evaluation score to its rubric band label. */
+export function computeBand(score: number): string {
   if (score >= 97) {
     return 'Exceptional (97-100)';
   }
@@ -128,7 +128,8 @@ function buildCriterionScore(
   };
 }
 
-function buildReport(
+/** Builds a combined 100-point EvaluationReport from deterministic and AI judge scores. */
+export function buildReport(
   detResults: readonly AnalyzerResult[],
   aiResult: AIJudgeResult,
 ): EvaluationReport {
@@ -143,7 +144,7 @@ function buildReport(
   const hardFailTriggered = detResults.some((r) => r.capApplied !== undefined);
   const allDeductions: DeductionItem[] = criteria
     .flatMap((c) => c.deductions)
-    .sort((a, b) => b.points - a.points);
+    .sort((a, b) => Math.abs(b.points) - Math.abs(a.points));
   return {
     timestamp: new Date().toISOString(),
     totalScore,
@@ -181,12 +182,13 @@ function printConsoleReport(report: EvaluationReport): void {
   if (topDeds.length > 0) {
     console.log('\nTop Deductions:');
     for (const d of topDeds) {
-      console.log(`- [${d.criterion}] -${d.points.toFixed(2)} pts: ${d.evidence}`);
+      console.log(`- [${d.criterion}] -${Math.abs(d.points).toFixed(2)} pts: ${d.evidence}`);
     }
   }
 }
 
-function formatMarkdownReport(report: EvaluationReport): string {
+/** Formats an EvaluationReport into a human-readable Markdown audit summary. */
+export function formatMarkdownReport(report: EvaluationReport): string {
   const lines: string[] = [
     '# SmogWise Virtual — Evaluation Audit Report',
     '',
@@ -210,7 +212,9 @@ function formatMarkdownReport(report: EvaluationReport): string {
     lines.push('No deductions recorded.');
   } else {
     for (const d of report.allDeductions) {
-      lines.push(`- **[${d.criterion}] -${d.points.toFixed(2)} pts:** ${d.evidence} _(Fix: ${d.fix})_`);
+      lines.push(
+        `- **[${d.criterion}] -${Math.abs(d.points).toFixed(2)} pts:** ${d.evidence} _(Fix: ${d.fix})_`,
+      );
     }
   }
   return `${lines.join('\n')}\n`;
@@ -236,17 +240,21 @@ async function runAllAnalyzers(rootDir: string): Promise<readonly AnalyzerResult
   ]);
 }
 
-async function main(): Promise<void> {
-  const rootDir = process.cwd();
+/** Runs all 6 deterministic analyzers plus the AI judge and persists latest audit reports. */
+export async function runEvaluator(rootDir = process.cwd()): Promise<EvaluationReport> {
+  dotenv.config({ override: true });
   const deterministicResults = await runAllAnalyzers(rootDir);
   const aiResult = await runAiJudge(rootDir, deterministicResults);
   const report = buildReport(deterministicResults, aiResult);
   writeReportFiles(rootDir, report);
   printConsoleReport(report);
+  return report;
 }
 
-main().catch((err: unknown) => {
-  const msg = err instanceof Error ? err.message : String(err);
-  console.error(`Evaluator failed: ${msg}`);
-  process.exitCode = 1;
-});
+if (isMainModule(import.meta.url)) {
+  runEvaluator().catch((err: unknown) => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`Evaluator failed: ${msg}`);
+    process.exitCode = 1;
+  });
+}

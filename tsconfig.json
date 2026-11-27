@@ -13,10 +13,14 @@
     "jsx": "react-jsx",
     "strict": true,
     "noImplicitAny": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "testscript", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "testscript", "vite.config.ts", "vitest.config.ts", "tailwind.config.ts"]
 }

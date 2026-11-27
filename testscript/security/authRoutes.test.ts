@@ -1,7 +1,12 @@
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../server/app.js';
 import type { UserProfile } from '../../src/domain/types.js';
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 const VALID_PASSWORD = 'SmogWise#Eval2026';
 const TAMPERED_COOKIE = 'smogwise_session=eyJzdWIiOiJldmFsX2ZhbWlseSJ9.invalidsig';
@@ -231,5 +236,66 @@ describe('Brute-force rate limiting & public evaluator routes', () => {
       .send({ profile: { ...SAMPLE_PROFILE, roomVolumeM3: 10 } });
     expect(invalidRoom.status).toBe(400);
     expect(invalidRoom.headers['ratelimit-policy']).toBe('120;w=900');
+  });
+
+  it('decouples POST /api/auth/logout from authLimiter and revokes session jti immediately', async () => {
+    const app = createApp();
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'senior.eval@smogwise.in', password: VALID_PASSWORD });
+    const cookie = extractCookiePair(loginRes.headers['set-cookie']);
+
+    for (let i = 0; i < 20; i += 1) {
+      await request(app)
+        .post('/api/auth/login')
+        .send({ email: 'senior.eval@smogwise.in', password: 'WrongPassword#2026' });
+    }
+    const rateLimitedLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'senior.eval@smogwise.in', password: VALID_PASSWORD });
+    expect(rateLimitedLogin.status).toBe(429);
+
+    const logoutRes = await request(app).post('/api/auth/logout').set('Cookie', cookie);
+    expect(logoutRes.status).toBe(200);
+    expect(logoutRes.headers['ratelimit-policy']).toBe('120;w=900');
+
+    const replayPrefs = await request(app).get('/api/user/preferences').set('Cookie', cookie);
+    expect(replayPrefs.status).toBe(401);
+  });
+
+  it('honors useLiveAq: false on /api/plan and /api/plan/briefing while rejecting it on preferences', async () => {
+    vi.stubEnv('GEMINI_API_KEY', '');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const app = createApp();
+
+    const planRes = await request(app)
+      .post('/api/plan')
+      .send({ profile: SAMPLE_PROFILE, useLiveAq: false });
+    expect(planRes.status).toBe(200);
+    expect(planRes.body.report.dataSource).toBe('city_preset');
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const briefingRes = await request(app)
+      .post('/api/plan/briefing')
+      .send({ profile: SAMPLE_PROFILE, useLiveAq: false });
+    expect(briefingRes.status).toBe(200);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const loginRes = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'commuter.eval@smogwise.in', password: VALID_PASSWORD });
+    const cookie = extractCookiePair(loginRes.headers['set-cookie']);
+
+    const badPrefsEnvelope = await request(app)
+      .put('/api/user/preferences')
+      .set('Cookie', cookie)
+      .send({ profile: SAMPLE_PROFILE, useLiveAq: false });
+    expect(badPrefsEnvelope.status).toBe(400);
+
+    const conflictPrefsEnvelope = await request(app)
+      .put('/api/user/preferences')
+      .set('Cookie', cookie)
+      .send({ city: 'delhi', profile: SAMPLE_PROFILE });
+    expect(conflictPrefsEnvelope.status).toBe(400);
   });
 });

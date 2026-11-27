@@ -5,6 +5,9 @@
 
 import type { AqiBandId, CommuteMode, CookingFuel, IAQHackId } from './types.js';
 
+/** Inclusive practical indoor PM2.5 target in ug/m3. */
+export const INDOOR_PRACTICAL_TARGET_UG_M3 = 30;
+
 /** Hourly diurnal winter boundary-layer inversion multipliers (00:00 to 23:00). */
 export const DIURNAL_INVERSION_FACTORS: readonly number[] = [
   1.12, 1.15, 1.18, 1.22, 1.25, 1.3, 1.35, 1.35, 1.32, 1.24, 1.08, 0.92,
@@ -59,13 +62,31 @@ export const MIN_ROOM_VOLUME_M3 = 12;
 /** Maximum clamped room volume in cubic meters. */
 export const MAX_ROOM_VOLUME_M3 = 500;
 
+/** Fallback room volume in cubic meters when input is non-finite. */
+export const DEFAULT_ROOM_VOLUME_M3 = 45;
+
+/** Maximum clamped ambient PM2.5 concentration (ug/m^3). */
+export const MAX_AMBIENT_PM25 = 1500;
+
+/** Maximum daily commute distance in kilometers. */
+export const MAX_COMMUTE_KM = 200;
+
+/** Maximum monthly household IAQ budget in INR. */
+export const MAX_BUDGET_INR = 500_000;
+
+/** Maximum household member count. */
+export const MAX_HOUSEHOLD_SIZE = 20;
+
+/** Maximum participating RWA households. */
+export const MAX_RWA_HOUSEHOLDS = 5000;
+
 /** Hours of the day when morning and evening cooking typically occur. */
 export const COOKING_HOURS: readonly number[] = [7, 8, 19, 20];
 
 /** Hours of the day representing morning and evening commute peaks. */
 export const COMMUTE_HOURS: readonly number[] = [8, 18];
 
-/** Optimal afternoon convective mixing hours for natural ventilation. */
+/** Afternoon hours to evaluate for natural ventilation. */
 export const OPTIMAL_VENTILATION_HOURS: readonly number[] = [13, 14, 15];
 
 /** Indoor cooking PM2.5 emission rates (ug/h) by fuel type. */
@@ -105,23 +126,17 @@ export const COOKING_DAILY_FACTORS: Readonly<Record<CookingFuel, CookingEmission
   induction: { co2eGramsPerDay: 920, pm25MgPerDay: 8, monthlyCostInr: 780 },
 };
 
-/** CPCB PM2.5 AQI band specification with bilingual labels. */
-export interface AqiBandSpec {
-  readonly id: AqiBandId;
-  readonly maxPm25: number;
-  readonly labelEn: string;
-  readonly labelHi: string;
-}
-
-/** Official CPCB PM2.5 breakpoints and category labels. */
-export const CPCB_AQI_BANDS: readonly AqiBandSpec[] = [
-  { id: 'good', maxPm25: 30, labelEn: 'Good', labelHi: 'अच्छा' },
-  { id: 'satisfactory', maxPm25: 60, labelEn: 'Satisfactory', labelHi: 'संतोषजनक' },
-  { id: 'moderate', maxPm25: 90, labelEn: 'Moderate', labelHi: 'मध्यम' },
-  { id: 'poor', maxPm25: 120, labelEn: 'Poor', labelHi: 'खराब' },
-  { id: 'very_poor', maxPm25: 250, labelEn: 'Very Poor', labelHi: 'बहुत खराब' },
-  { id: 'severe', maxPm25: Number.POSITIVE_INFINITY, labelEn: 'Severe', labelHi: 'गंभीर' },
-];
+/** O(1) bilingual CPCB AQI band label lookup keyed by AqiBandId. */
+export const AQI_BAND_LABELS: Readonly<
+  Record<AqiBandId, { readonly en: string; readonly hi: string }>
+> = {
+  good: { en: 'Good', hi: 'अच्छा' },
+  satisfactory: { en: 'Satisfactory', hi: 'संतोषजनक' },
+  moderate: { en: 'Moderate', hi: 'मध्यम' },
+  poor: { en: 'Poor', hi: 'खराब' },
+  very_poor: { en: 'Very Poor', hi: 'बहुत खराब' },
+  severe: { en: 'Severe', hi: 'गंभीर' },
+};
 
 /** Specification for a household IAQ or personal protection intervention. */
 export interface IAQHackSpec {
@@ -140,12 +155,12 @@ export const IAQ_HACK_SPECS: Readonly<Record<IAQHackId, IAQHackSpec>> = {
   ventilation_window: {
     id: 'ventilation_window',
     monthlyCostInr: 0,
-    doseImpactLabel: '10-18% lower indoor peak',
-    doseImpactLabelHi: 'इनडोर पीक 10-18% कम',
+    doseImpactLabel: 'Lowers PM2.5 when outdoor air is cleaner',
+    doseImpactLabelHi: 'बाहर की हवा साफ़ होने पर PM2.5 कम होता है',
     name: 'Afternoon Ventilation Window',
     nameHi: 'दोपहर वेंटिलेशन विंडो',
-    instructions: 'Open cross-ventilation windows only between 1:00 PM and 4:00 PM.',
-    instructionsHi: 'केवल दोपहर 1:00 से 4:00 बजे के बीच खिड़कियां खोलकर हवा बदलें।',
+    instructions: 'Between 1 and 4 PM, open windows only if outdoor PM2.5 is below indoor PM2.5 and at or below 120 ug/m3.',
+    instructionsHi: 'दोपहर 1 से 4 बजे के बीच खिड़कियां तभी खोलें जब बाहर PM2.5 अंदर से कम और 120 ug/m3 या उससे कम हो।',
   },
   wet_mopping: {
     id: 'wet_mopping',
@@ -198,16 +213,3 @@ export const IAQ_HACK_SPECS: Readonly<Record<IAQHackId, IAQHackSpec>> = {
     instructionsHi: 'मुख्य बेडरूम में लगातार ट्रू HEPA H13 एयर प्यूरीफायर चलाएं।',
   },
 };
-
-/**
- * Returns the CPCB AQI band matching a given PM2.5 concentration in ug/m^3.
- */
-export function getAqiBand(pm25: number): AqiBandSpec {
-  const safePm25 = Number.isFinite(pm25) ? Math.max(0, pm25) : 0;
-  for (const band of CPCB_AQI_BANDS) {
-    if (safePm25 <= band.maxPm25) {
-      return band;
-    }
-  }
-  return CPCB_AQI_BANDS[CPCB_AQI_BANDS.length - 1] as AqiBandSpec;
-}

@@ -13,7 +13,7 @@ export interface SampleScenario {
   readonly profile: UserProfile;
 }
 
-/** Five curated Indian winter smog scenarios mapped to verified city preset IDs. */
+/** Six curated Indian winter smog scenarios mapped to verified city preset IDs. */
 export const SAMPLE_SCENARIOS: readonly SampleScenario[] = [
   {
     id: 'delhi_young_family',

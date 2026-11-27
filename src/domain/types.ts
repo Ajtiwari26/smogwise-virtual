@@ -3,36 +3,49 @@
  * Zero React, DOM, Node, or network dependencies.
  */
 
+/** Canonical UI and advisory output language codes. */
+export const LANGUAGE_CODES = ['en', 'hi'] as const;
 /** Supported UI and advisory output languages. */
-export type LanguageCode = 'en' | 'hi';
+export type LanguageCode = (typeof LANGUAGE_CODES)[number];
 
+/** Canonical household persona identifiers. */
+export const PERSONA_TYPES = [
+  'young_family',
+  'sensitive_household',
+  'rwa_coordinator',
+  'office_commuter',
+  'outdoor_student',
+] as const;
 /** Target user persona archetypes. */
-export type PersonaType =
-  | 'young_family'
-  | 'sensitive_household'
-  | 'rwa_coordinator'
-  | 'office_commuter'
-  | 'outdoor_student';
+export type PersonaType = (typeof PERSONA_TYPES)[number];
 
+/** Canonical daily commute mode identifiers. */
+export const COMMUTE_MODES = [
+  'petrol_car',
+  'two_wheeler',
+  'metro_bus',
+  'carpool',
+  'wfh_walk',
+] as const;
 /** Daily commute mode options. */
-export type CommuteMode =
-  | 'petrol_car'
-  | 'two_wheeler'
-  | 'metro_bus'
-  | 'carpool'
-  | 'wfh_walk';
+export type CommuteMode = (typeof COMMUTE_MODES)[number];
 
+/** Canonical household cooking fuel identifiers. */
+export const COOKING_FUELS = ['lpg', 'induction', 'biomass_chulha'] as const;
 /** Primary household cooking fuel types. */
-export type CookingFuel = 'lpg' | 'induction' | 'biomass_chulha';
+export type CookingFuel = (typeof COOKING_FUELS)[number];
 
+/** Canonical indoor air quality and personal protection hack identifiers. */
+export const IAQ_HACK_IDS = [
+  'window_sealing',
+  'wet_mopping',
+  'ventilation_window',
+  'corsi_rosenthal_box',
+  'hepa_purifier',
+  'n95_mask',
+] as const;
 /** Supported indoor air quality and personal protection interventions. */
-export type IAQHackId =
-  | 'window_sealing'
-  | 'wet_mopping'
-  | 'ventilation_window'
-  | 'corsi_rosenthal_box'
-  | 'hepa_purifier'
-  | 'n95_mask';
+export type IAQHackId = (typeof IAQ_HACK_IDS)[number];
 
 /** Graded Response Action Plan (GRAP) winter smog severity stage. */
 export type GRAPStage = 'NONE' | 'GRAP_I' | 'GRAP_II' | 'GRAP_III' | 'GRAP_IV';
@@ -125,6 +138,7 @@ export interface ExposureMetrics {
   readonly doseReductionPercent: number;
   readonly baselineIndoorPm25: number;
   readonly optimizedIndoorPm25: number;
+  /** Afternoon hours to check for ventilation eligibility in hourlySeries. */
   readonly optimalVentilationWindow: string;
   readonly hourlySeries?: readonly HourlyExposurePoint[];
 }

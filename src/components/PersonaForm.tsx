@@ -3,18 +3,20 @@
  */
 
 import React, { useCallback, useState } from 'react';
+import { SAMPLE_SCENARIOS } from '../domain/sampleScenarios.js';
 import type {
   IAQHackDetail,
   IAQHackId,
   LocationSearchItem,
   UserProfile,
 } from '../domain/types.js';
+import { buildCustomLocation } from '../hooks/useSmogPlanHelpers.js';
 import {
-  HackChecklist,
   HouseholdNumericFields,
   LifestyleAndPersonaFields,
   LocationSectionFields,
 } from './PersonaFormSections.js';
+import { HackChecklist } from './PersonaHackChecklist.js';
 import { ScenarioPresetBar } from './ScenarioPresetBar.js';
 
 /** Props for the household PersonaForm component. */
@@ -37,71 +39,97 @@ interface FormActionHandlers {
   readonly handleScenarioSelect: (scenarioId: string, scenarioProfile: UserProfile) => void;
 }
 
-function usePersonaFormHandlers(props: PersonaFormProps): FormActionHandlers {
-  const { onUpdate, onToggleHack, onSelectLocation, onSelectPresetCity, onApplyScenario } = props;
-  const [activeScenarioId, setActiveScenarioId] = useState<string | undefined>(undefined);
+function resolveSyncedScenarioId(
+  selectedId: string | undefined,
+  profile: UserProfile,
+): string | undefined {
+  if (selectedId === undefined || profile.customLocation !== undefined) {
+    return undefined;
+  }
+  const matched = SAMPLE_SCENARIOS.find((item) => item.id === selectedId);
+  if (
+    matched === undefined ||
+    matched.profile.cityId !== profile.cityId ||
+    matched.profile.persona !== profile.persona
+  ) {
+    return undefined;
+  }
+  return selectedId;
+}
 
-  const handleManualUpdate = useCallback(
-    (patch: Partial<UserProfile>) => {
-      setActiveScenarioId(undefined);
-      onUpdate(patch);
-    },
-    [onUpdate],
-  );
-  const handleManualToggleHack = useCallback(
-    (hackId: IAQHackId) => {
-      setActiveScenarioId(undefined);
-      onToggleHack(hackId);
-    },
-    [onToggleHack],
-  );
+function useLocationSelectionHandlers(
+  props: PersonaFormProps,
+  setSelectedScenarioId: React.Dispatch<React.SetStateAction<string | undefined>>,
+): Pick<
+  FormActionHandlers,
+  'handleLocationSelect' | 'handlePresetCitySelect' | 'handleScenarioSelect'
+> {
+  const { onUpdate, onSelectLocation, onSelectPresetCity, onApplyScenario } = props;
+
   const handleLocationSelect = useCallback(
     (item: LocationSearchItem) => {
-      setActiveScenarioId(undefined);
+      setSelectedScenarioId(undefined);
       if (onSelectLocation !== undefined) {
         onSelectLocation(item);
         return;
       }
-      onUpdate({
-        customLocation: {
-          name: item.name,
-          ...(item.state.trim().length > 0 ? { state: item.state.trim() } : {}),
-          lat: item.lat,
-          lon: item.lon,
-        },
-      });
+      onUpdate({ customLocation: buildCustomLocation(item) });
     },
-    [onSelectLocation, onUpdate],
+    [onSelectLocation, onUpdate, setSelectedScenarioId],
   );
+
   const handlePresetCitySelect = useCallback(
     (cityId: string) => {
-      setActiveScenarioId(undefined);
+      setSelectedScenarioId(undefined);
       if (onSelectPresetCity !== undefined) {
         onSelectPresetCity(cityId);
       } else {
         onUpdate({ cityId });
       }
     },
-    [onSelectPresetCity, onUpdate],
+    [onSelectPresetCity, onUpdate, setSelectedScenarioId],
   );
+
   const handleScenarioSelect = useCallback(
     (scenarioId: string, scenarioProfile: UserProfile) => {
-      setActiveScenarioId(scenarioId);
+      setSelectedScenarioId(scenarioId);
       if (onApplyScenario !== undefined) {
         onApplyScenario(scenarioProfile);
       } else {
         onUpdate(scenarioProfile);
       }
     },
-    [onApplyScenario, onUpdate],
+    [onApplyScenario, onUpdate, setSelectedScenarioId],
   );
+
+  return { handleLocationSelect, handlePresetCitySelect, handleScenarioSelect };
+}
+
+function usePersonaFormHandlers(props: PersonaFormProps): FormActionHandlers {
+  const { profile, onUpdate, onToggleHack } = props;
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string | undefined>(undefined);
+  const locationHandlers = useLocationSelectionHandlers(props, setSelectedScenarioId);
+
+  const handleManualUpdate = useCallback(
+    (patch: Partial<UserProfile>) => {
+      setSelectedScenarioId(undefined);
+      onUpdate(patch);
+    },
+    [onUpdate],
+  );
+  const handleManualToggleHack = useCallback(
+    (hackId: IAQHackId) => {
+      setSelectedScenarioId(undefined);
+      onToggleHack(hackId);
+    },
+    [onToggleHack],
+  );
+
   return {
-    activeScenarioId,
+    activeScenarioId: resolveSyncedScenarioId(selectedScenarioId, profile),
     handleManualUpdate,
     handleManualToggleHack,
-    handleLocationSelect,
-    handlePresetCitySelect,
-    handleScenarioSelect,
+    ...locationHandlers,
   };
 }
 
@@ -126,7 +154,7 @@ export const PersonaForm: React.FC<PersonaFormProps> = React.memo(function Perso
           onSelectScenario={handlers.handleScenarioSelect}
         />
       </div>
-      <form className="mt-3 space-y-3" onSubmit={(e) => e.preventDefault()}>
+      <form className="mt-3 space-y-3" noValidate onSubmit={(e) => e.preventDefault()}>
         <LocationSectionFields
           profile={profile}
           isHi={isHi}

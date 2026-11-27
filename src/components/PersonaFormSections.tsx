@@ -5,52 +5,23 @@
 import React from 'react';
 import { CITY_PRESETS } from '../domain/cityPresets.js';
 import type {
-  CommuteMode,
-  CookingFuel,
-  IAQHackDetail,
-  IAQHackId,
-  LanguageCode,
   LocationSearchItem,
-  PersonaType,
   UserProfile,
 } from '../domain/types.js';
 import { LocationSearchCombobox } from './LocationSearchCombobox.js';
-
-interface BilingualOption<T extends string> {
-  readonly id: T;
-  readonly en: string;
-  readonly hi: string;
-}
-
-const PERSONA_OPTIONS: readonly BilingualOption<PersonaType>[] = [
-  { id: 'young_family', en: 'Young Family', hi: 'युवा परिवार' },
-  { id: 'sensitive_household', en: 'Sensitive Household (Elderly/Asthma)', hi: 'संवेदनशील परिवार (बुजुर्ग/अस्थमा)' },
-  { id: 'rwa_coordinator', en: 'RWA / Community Coordinator', hi: 'RWA / समुदाय समन्वयक' },
-  { id: 'office_commuter', en: 'Daily Office Commuter', hi: 'दैनिक ऑफिस यात्री' },
-  { id: 'outdoor_student', en: 'School / Outdoor Student', hi: 'स्कूल / बाहरी छात्र' },
-];
-
-const COMMUTE_OPTIONS: readonly BilingualOption<CommuteMode>[] = [
-  { id: 'petrol_car', en: 'Petrol Car', hi: 'पेट्रोल कार' },
-  { id: 'two_wheeler', en: 'Two-Wheeler', hi: 'दोपहिया वाहन' },
-  { id: 'metro_bus', en: 'Metro / Bus', hi: 'मेट्रो / बस' },
-  { id: 'carpool', en: 'Carpool', hi: 'कारपूल' },
-  { id: 'wfh_walk', en: 'WFH / Walk', hi: 'घर से काम / पैदल' },
-];
-
-const FUEL_OPTIONS: readonly BilingualOption<CookingFuel>[] = [
-  { id: 'lpg', en: 'LPG Stove', hi: 'एलपीजी चूल्हा' },
-  { id: 'induction', en: 'Induction / Electric', hi: 'इंडक्शन / इलेक्ट्रिक' },
-  { id: 'biomass_chulha', en: 'Biomass / Chulha', hi: 'बायोमास / चूल्हा' },
-];
-
-export const INPUT_CLS =
-  'mt-1 w-full rounded-md border border-slate-400 bg-white px-2.5 py-1.5 ' +
-  'text-sm text-slate-900 focus-visible:ring-2 focus-visible:ring-teal-700';
+import {
+  COMMUTE_OPTIONS,
+  FUEL_OPTIONS,
+  INPUT_CLS,
+  PERSONA_OPTIONS,
+  SelectField,
+} from './PersonaSelectFields.js';
 
 function clampInt(raw: string, fallback: number, min: number, max: number): number {
   const n = Number(raw);
-  if (!Number.isFinite(n)) return fallback;
+  if (!Number.isFinite(n)) {
+    return fallback;
+  }
   return Math.min(max, Math.max(min, Math.round(n)));
 }
 
@@ -84,13 +55,17 @@ function NumericBox(props: NumericBoxProps): React.JSX.Element {
         onChange={(e) => onChangeValue(clampInt(e.target.value, min, min, max))}
         className={INPUT_CLS}
       />
-      <span id={hintId} className={`mt-0.5 block text-[11px] ${isOutOfRange ? 'font-semibold text-red-800' : 'text-slate-700'}`}>
+      <span
+        id={hintId}
+        className={`mt-0.5 block text-xs ${isOutOfRange ? 'font-semibold text-red-800' : 'text-slate-700'}`}
+      >
         {hint}
       </span>
     </div>
   );
 }
 
+/** Grid of household size, monthly budget, room volume, and daily commute numeric fields. */
 export const HouseholdNumericFields: React.FC<{
   readonly profile: UserProfile;
   readonly isHi: boolean;
@@ -143,6 +118,7 @@ export const HouseholdNumericFields: React.FC<{
   );
 });
 
+/** Persona selector, vulnerable member checkbox, commute mode, and cooking fuel selectors. */
 export const LifestyleAndPersonaFields: React.FC<{
   readonly profile: UserProfile;
   readonly isHi: boolean;
@@ -150,28 +126,21 @@ export const LifestyleAndPersonaFields: React.FC<{
 }> = React.memo(function LifestyleAndPersonaFields({ profile, isHi, onUpdate }) {
   return (
     <>
-      <div>
-        <label htmlFor="persona-select" className="block text-xs font-semibold text-slate-800">
-          {isHi ? 'परिवार का प्रकार' : 'Household Persona'}
-        </label>
-        <select
-          id="persona-select"
-          value={profile.persona}
-          onChange={(e) => onUpdate({ persona: e.target.value as PersonaType })}
-          className={INPUT_CLS}
-        >
-          {PERSONA_OPTIONS.map((opt) => (
-            <option key={opt.id} value={opt.id}>{isHi ? opt.hi : opt.en}</option>
-          ))}
-        </select>
-      </div>
+      <SelectField
+        id="persona-select"
+        label={isHi ? 'परिवार का प्रकार' : 'Household Persona'}
+        value={profile.persona}
+        options={PERSONA_OPTIONS}
+        isHi={isHi}
+        onSelect={(persona) => onUpdate({ persona })}
+      />
       <div className="flex items-center gap-2">
         <input
           id="vulnerable-member"
           type="checkbox"
           checked={profile.hasVulnerableMember}
           onChange={(e) => onUpdate({ hasVulnerableMember: e.target.checked })}
-          className="h-4 w-4 rounded border-slate-400 text-teal-700 focus-visible:ring-2 focus-visible:ring-teal-700"
+          className="h-4 w-4 rounded border-slate-500 text-teal-700 focus-visible:ring-2 focus-visible:ring-teal-700"
         />
         <label htmlFor="vulnerable-member" className="text-xs font-semibold text-slate-800">
           {isHi
@@ -180,36 +149,22 @@ export const LifestyleAndPersonaFields: React.FC<{
         </label>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label htmlFor="commute-mode" className="block text-xs font-semibold text-slate-800">
-            {isHi ? 'यात्रा का माध्यम' : 'Commute Mode'}
-          </label>
-          <select
-            id="commute-mode"
-            value={profile.commuteMode}
-            onChange={(e) => onUpdate({ commuteMode: e.target.value as CommuteMode })}
-            className={INPUT_CLS}
-          >
-            {COMMUTE_OPTIONS.map((opt) => (
-              <option key={opt.id} value={opt.id}>{isHi ? opt.hi : opt.en}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label htmlFor="cooking-fuel" className="block text-xs font-semibold text-slate-800">
-            {isHi ? 'रसोई ईंधन' : 'Cooking Fuel'}
-          </label>
-          <select
-            id="cooking-fuel"
-            value={profile.cookingFuel}
-            onChange={(e) => onUpdate({ cookingFuel: e.target.value as CookingFuel })}
-            className={INPUT_CLS}
-          >
-            {FUEL_OPTIONS.map((opt) => (
-              <option key={opt.id} value={opt.id}>{isHi ? opt.hi : opt.en}</option>
-            ))}
-          </select>
-        </div>
+        <SelectField
+          id="commute-mode"
+          label={isHi ? 'यात्रा का माध्यम' : 'Commute Mode'}
+          value={profile.commuteMode}
+          options={COMMUTE_OPTIONS}
+          isHi={isHi}
+          onSelect={(commuteMode) => onUpdate({ commuteMode })}
+        />
+        <SelectField
+          id="cooking-fuel"
+          label={isHi ? 'रसोई ईंधन' : 'Cooking Fuel'}
+          value={profile.cookingFuel}
+          options={FUEL_OPTIONS}
+          isHi={isHi}
+          onSelect={(cookingFuel) => onUpdate({ cookingFuel })}
+        />
       </div>
     </>
   );
@@ -217,6 +172,7 @@ export const LifestyleAndPersonaFields: React.FC<{
 
 const CUSTOM_CITY_OPTION = '__custom_location__';
 
+/** Pan-India location combobox paired with major winter smog preset city selector. */
 export const LocationSectionFields: React.FC<{
   readonly profile: UserProfile;
   readonly isHi: boolean;
@@ -231,7 +187,7 @@ export const LocationSectionFields: React.FC<{
   const customLoc = profile.customLocation;
   const selectValue = customLoc !== undefined ? CUSTOM_CITY_OPTION : profile.cityId;
   return (
-    <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+    <div className="space-y-3 rounded-md border border-slate-300 bg-slate-50 p-3">
       <LocationSearchCombobox
         language={profile.language}
         customLocation={customLoc}
@@ -262,47 +218,5 @@ export const LocationSectionFields: React.FC<{
         </select>
       </div>
     </div>
-  );
-});
-
-export const HackChecklist: React.FC<{
-  readonly hacks: readonly IAQHackDetail[];
-  readonly language: LanguageCode;
-  readonly onToggle: (hackId: IAQHackId) => void;
-}> = React.memo(function HackChecklist({ hacks, language, onToggle }) {
-  const isHi = language === 'hi';
-  return (
-    <fieldset className="mt-4 border-t border-slate-200 pt-4">
-      <legend className="text-sm font-bold text-slate-900">
-        {isHi ? 'घर की हवा सुधारने के उपाय (IAQ Hacks)' : 'Active Indoor Air Quality (IAQ) Hacks'}
-      </legend>
-      <div className="mt-2 space-y-2">
-        {hacks.map((hack) => {
-          const inputId = `hack-${hack.id}`;
-          return (
-            <div
-              key={hack.id}
-              className="flex items-start gap-2.5 rounded-md border border-slate-300 bg-slate-50 p-2.5 hover:bg-slate-100"
-            >
-              <input
-                id={inputId}
-                type="checkbox"
-                checked={hack.isActive}
-                onChange={() => onToggle(hack.id)}
-                className="mt-1 h-4 w-4 rounded border-slate-400 text-teal-700 focus-visible:ring-2 focus-visible:ring-teal-700"
-              />
-              <label htmlFor={inputId} className="flex-1 cursor-pointer text-xs text-slate-900">
-                <span className="block font-semibold">
-                  {isHi ? hack.nameHi : hack.name} · ₹{hack.monthlyCostInr}/mo
-                </span>
-                <span className="block text-slate-700">
-                  {isHi ? (hack.doseImpactLabelHi ?? hack.doseImpactLabel) : hack.doseImpactLabel}
-                </span>
-              </label>
-            </div>
-          );
-        })}
-      </div>
-    </fieldset>
   );
 });

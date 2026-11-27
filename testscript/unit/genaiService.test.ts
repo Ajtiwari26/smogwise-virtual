@@ -27,6 +27,7 @@ const BASE_ENV: EnvConfig = {
   geminiApiKey: 'mock-unit-test-key',
   nodeEnv: 'test',
   authSecret: 'unit-test-secret-0123456789abcdef',
+  trustProxy: false,
 };
 
 function makeProfile(overrides: Partial<UserProfile> = {}): UserProfile {
@@ -161,6 +162,30 @@ describe('generatePlanBriefing online parsing, fallback, and scrubbing', () => {
     expect(res.headline).toBe('Fallback Model Briefing');
   });
 
+  it.each([
+    { headline: '[CALC:FABRICATED]' },
+    { summary: '[AQ:SOURCE]' },
+    { whyActions: ['[ SCI :\nINVENTED ]'] },
+  ])('falls back when briefing fields contain only citations %j', async (overrides) => {
+    mockEnv(BASE_ENV.geminiApiKey);
+    const profile = makeProfile();
+    const { report } = computeFullPlan(profile);
+    mockInteractionsCreate.mockResolvedValueOnce({
+      output_text: JSON.stringify({
+        headline: 'Household protection plan',
+        summary: 'Indoor filtration can lower particulate concentrations.',
+        whyActions: ['Reducing drafts cuts outdoor particle infiltration.'],
+        ...overrides,
+      }),
+    });
+
+    const result = await generatePlanBriefing(profile, report);
+    expect(result.mode).toBe('offline_grounded');
+    expect(result.headline.length).toBeGreaterThanOrEqual(4);
+    expect(result.summary.length).toBeGreaterThanOrEqual(10);
+    expect(result.whyActions.every((action) => action.length >= 6)).toBe(true);
+  });
+
   it('falls back cleanly to offline_grounded when model returns malformed JSON', async () => {
     mockEnv(BASE_ENV.geminiApiKey);
     const profile = makeProfile();
@@ -231,6 +256,41 @@ describe('askGroundedAssistant and buildLocationContextTag', () => {
     expect(offlineRes.mode).toBe('offline_grounded');
     expect(offlineRes.guardTriggered).toBe(false);
     expect(offlineRes.citationsUsed).toContain('AQ:SOURCE');
+
+    mockEnv(BASE_ENV.geminiApiKey);
+    mockInteractionsCreate.mockResolvedValueOnce({
+      output_text: 'Ventilate at 14:00 [CALC:HALLUCINATED] [SCI:BOGUS].',
+    });
+    const strippedRes = await askGroundedAssistant({
+      question: 'Could [CALC:SPOOF] sealing [ AQ :\tFAKE\nVALUE ] help [SCI:\r\nBOGUS] indoors?',
+      profile: makeProfile({ language: 'en' }),
+    });
+    expect(mockInteractionsCreate.mock.calls.at(-1)?.[0]).toMatchObject({
+      input: expect.stringContaining('<user_query>Could sealing help indoors?</user_query>'),
+    });
+    expect(strippedRes.answer).not.toContain('[CALC:HALLUCINATED]');
+    expect(strippedRes.answer).not.toContain('[SCI:BOGUS]');
+    expect(strippedRes.citationsUsed).toEqual(
+      expect.arrayContaining(['CALC:DOSE_AFTER', 'AQ:SOURCE']),
+    );
+  });
+
+  it.each([
+    ['en', '[CALC:UNKNOWN] [AQ:UNKNOWN]'],
+    ['hi', '**[CALC:DOSE_AFTER]** — [AQ:SOURCE]।'],
+  ] as const)('uses a grounded %s answer when output has only citation tags', async (
+    language, output_text,
+  ) => {
+    mockEnv(BASE_ENV.geminiApiKey);
+    mockInteractionsCreate.mockResolvedValueOnce({ output_text });
+    const res = await askGroundedAssistant({
+      question: 'What is my inhaled dose?',
+      profile: makeProfile({ language }),
+    });
+    expect(res).toMatchObject({ language, mode: 'offline_grounded', guardTriggered: false });
+    expect(res.answer).toContain(String(res.report.exposure.optimizedInhaledUgPerDay));
+    expect(res.citationsUsed).toEqual(expect.arrayContaining(['CALC:DOSE_AFTER', 'AQ:SOURCE']));
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(1);
   });
 
   it('escapes XML special characters in buildLocationContextTag', () => {
@@ -271,19 +331,30 @@ describe('generatePlanBriefing RWA cache invariance and interaction timeout opti
       }),
     });
 
-    const baseProfile = makeProfile({ rwaHouseholds: 10, rwaAdoptionRate: 0.2 });
+    const baseProfile = makeProfile({
+      persona: 'rwa_coordinator', rwaHouseholds: 10, rwaAdoptionRate: 0.2,
+    });
     const baseReport = computeFullPlan(baseProfile).report;
     const first = await generatePlanBriefing(baseProfile, baseReport);
 
     expect(first.mode).toBe('gemini_interactions');
     expect(mockInteractionsCreate).toHaveBeenCalledTimes(1);
-    const firstArg = mockInteractionsCreate.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(firstArg['model']).toBe('gemini-3.5-flash-lite');
-    const secondArg = mockInteractionsCreate.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(secondArg).toEqual({ timeout_ms: 4500 });
+    const [request, options] = mockInteractionsCreate.mock.calls.at(-1) ?? [];
+    expect(request).toMatchObject({ model: 'gemini-3.5-flash-lite', input: expect.any(String) });
+    expect(request).toMatchObject({
+      input: expect.not.stringMatching(/rwaHouseholds|rwaAdoptionRate|communityCo2e|communityPm25/),
+    });
+    expect(options).toEqual({
+      timeout_ms: 4500,
+      signal: expect.any(AbortSignal),
+      retries: { strategy: 'none' },
+    });
 
-    const updatedProfile = makeProfile({ rwaHouseholds: 250, rwaAdoptionRate: 0.9 });
+    const updatedProfile = { ...baseProfile, rwaHouseholds: 250, rwaAdoptionRate: 0.9 };
     const updatedReport = computeFullPlan(updatedProfile).report;
+    expect(updatedReport.emissions.communityCo2eAvoidedKgPerMonth).not.toBe(
+      baseReport.emissions.communityCo2eAvoidedKgPerMonth,
+    );
     const second = await generatePlanBriefing(updatedProfile, updatedReport);
 
     expect(second).toEqual(first);
@@ -313,9 +384,108 @@ describe('generatePlanBriefing RWA cache invariance and interaction timeout opti
     const res = await generatePlanBriefing(profile, report);
     expect(res.mode).toBe('gemini_interactions');
     expect(mockInteractionsCreate).toHaveBeenCalledTimes(2);
-    const fallbackCall = mockInteractionsCreate.mock.calls[1]?.[0] as Record<string, unknown>;
-    expect(fallbackCall['model']).toBe('gemini-4-hydrogen');
-    const fallbackOpts = mockInteractionsCreate.mock.calls[1]?.[1] as Record<string, unknown>;
-    expect(fallbackOpts).toEqual({ timeout_ms: 1200 });
+    const [request, options] = mockInteractionsCreate.mock.calls.at(-1) ?? [];
+    expect(request).toMatchObject({ model: 'gemini-4-hydrogen' });
+    expect(options).toEqual({
+      timeout_ms: 1200,
+      signal: expect.any(AbortSignal),
+      retries: { strategy: 'none' },
+    });
+  });
+
+  it('aborts the AbortSignal when an interaction exceeds its timeout budget', async () => {
+    vi.useFakeTimers();
+    try {
+      mockEnv('live-key');
+      const capturedSignals: AbortSignal[] = [];
+      mockInteractionsCreate.mockImplementation(
+        (_payload: unknown, opts?: { signal?: AbortSignal }) => {
+          if (opts?.signal) {
+            capturedSignals.push(opts.signal);
+          }
+          return new Promise(() => {
+            // Intentionally unresolved to trigger timeout abort.
+          });
+        },
+      );
+      const profile = makeProfile({ language: 'en' });
+      const report = computeFullPlan(profile).report;
+      const promise = generatePlanBriefing(profile, report);
+      await vi.advanceTimersByTimeAsync(7000);
+      const res = await promise;
+      expect(res.mode).toBe('offline_grounded');
+      expect(capturedSignals.length).toBeGreaterThanOrEqual(1);
+      expect(capturedSignals.every((s) => s.aborted)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('extracts JSON briefing cleanly when model prepends prose before a fenced JSON block', async () => {
+    mockEnv('live-key');
+    mockInteractionsCreate.mockResolvedValueOnce({
+      output_text: [
+        'Here is your personalized household summary:',
+        '```json',
+        JSON.stringify({
+          headline: 'Seal doors and ventilate mid-afternoon',
+          summary: 'Clean air dose drops strongly by [CALC:DOSE_AFTER] under [AQ:SOURCE].',
+          whyActions: ['Cross-ventilate cleanly between 13:00 and 16:00 [CALC:SAVINGS_PCT].'],
+        }),
+        '```',
+      ].join('\n'),
+    });
+    const profile = makeProfile({ language: 'en' });
+    const report = computeFullPlan(profile).report;
+    const res = await generatePlanBriefing(profile, report);
+    expect(res.mode).toBe('gemini_interactions');
+    expect(res.headline).toBe('Seal doors and ventilate mid-afternoon');
+    expect(res.citationsUsed).toContain('CALC:DOSE_AFTER');
+    expect(res.citationsUsed).toContain('AQ:SOURCE');
+  });
+
+  it('coalesces concurrent generatePlanBriefing calls via singleflight and keys on live AQ baseline', async () => {
+    mockEnv('live-key');
+    let releaseCall: ((val: unknown) => void) | undefined;
+    mockInteractionsCreate.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseCall = resolve;
+        }),
+    );
+    const profile = makeProfile({ language: 'en' });
+    const report = computeFullPlan(profile).report;
+
+    const p1 = generatePlanBriefing(profile, report);
+    const p2 = generatePlanBriefing(profile, report);
+    await Promise.resolve();
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(1);
+
+    releaseCall?.({
+      output_text: JSON.stringify({
+        headline: 'Coalesced briefing headline',
+        summary: 'Coalesced response for [CALC:DOSE_AFTER] using [AQ:SOURCE].',
+        whyActions: ['Verify singleflight dedupes concurrent requests [CALC:SAVINGS_PCT].'],
+      }),
+    });
+
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1).toEqual(r2);
+    expect(r1.mode).toBe('gemini_interactions');
+
+    const liveReport = computeFullPlan(profile, {
+      pm25: 310,
+      observedAt: '2026-11-27T00:00:00.000Z',
+    }).report;
+    mockInteractionsCreate.mockResolvedValueOnce({
+      output_text: JSON.stringify({
+        headline: 'Live AQ invalidated briefing',
+        summary: 'Updated for higher ambient baseline [CALC:DOSE_AFTER] via [AQ:SOURCE].',
+        whyActions: ['Cache key reflects dataSource and baselinePm25 [CALC:SAVINGS_PCT].'],
+      }),
+    });
+    const r3 = await generatePlanBriefing(profile, liveReport);
+    expect(mockInteractionsCreate).toHaveBeenCalledTimes(2);
+    expect(r3.headline).toBe('Live AQ invalidated briefing');
   });
 });

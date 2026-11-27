@@ -1,6 +1,21 @@
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../server/app.js';
+import {
+  clearGeocodingCache,
+  searchIndianLocations,
+} from '../../server/services/geocodingClient.js';
+import { fetchBoundedJson } from '../../server/services/httpFetch.js';
+import {
+  findNearestIndianPreset,
+  haversineKm,
+  normalizeObservedAt,
+} from '../../server/services/openMeteoHelpers.js';
+import {
+  clearAirQualityCache,
+  fetchAirQualityForCoords,
+  LiveAqUnavailableError,
+} from '../../server/services/openMeteoClient.js';
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -10,6 +25,8 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 afterEach(() => {
+  clearAirQualityCache();
+  clearGeocodingCache();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -27,6 +44,13 @@ describe('GET /api/locations/search', () => {
             latitude: 26.9124,
             longitude: 75.7873,
           },
+          {
+            id: 9999991,
+            name: 'BorderMissingCountry',
+            admin1: 'Unknown',
+            latitude: 30.1,
+            longitude: 72.1,
+          },
         ],
       }),
     );
@@ -35,6 +59,9 @@ describe('GET /api/locations/search', () => {
     const res = await request(createApp()).get('/api/locations/search?q=Jaipur');
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body.results)).toBe(true);
+    expect(res.body.results.some((r: { name: string }) => r.name === 'BorderMissingCountry')).toBe(
+      false,
+    );
     expect(res.body.results[0]).toMatchObject({
       name: 'Jaipur',
       lat: 26.91,
@@ -42,6 +69,38 @@ describe('GET /api/locations/search', () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it.each([{}, { results: null }, { error: true, generationtime_ms: 0.4 }, null])(
+    'uses matching presets and retries after malformed geocoding payload %j',
+    async (invalidPayload) => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse(invalidPayload))
+        .mockResolvedValueOnce(jsonResponse({
+          results: [{
+            name: 'Bandra', admin1: 'Maharashtra', country_code: 'in',
+            latitude: 19.06, longitude: 72.83,
+          }],
+        }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      expect(await searchIndianLocations('Bandra')).toMatchObject([{ id: 'mumbai_bandra' }]);
+      expect(await searchIndianLocations('Bandra')).toMatchObject([{ name: 'Bandra' }]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([{ results: [] }, { generationtime_ms: 0.4 }])(
+    'caches valid empty payload %j while continuing to surface matching presets',
+    async (emptyPayload) => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(emptyPayload));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const results = await searchIndianLocations('Bandra');
+      expect(results).toMatchObject([{ id: 'mumbai_bandra' }]);
+      expect(await searchIndianLocations('Bandra')).toEqual(results);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('rejects Express array queries and SSRF targets with 400 INVALID_QUERY', async () => {
     const app = createApp();
@@ -103,6 +162,29 @@ describe('GET /api/aqi pan-India coordinates, IST timestamps, and fallbacks', ()
     expect(udaipurRes.body.error).toBe('LIVE_AQ_UNAVAILABLE');
   });
 
+  it.each([false, true])('isolates near/far fallback in one grid (far starts first: %s)', async (
+    farFirst,
+  ) => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error('Open-Meteo outage'));
+    vi.stubGlobal('fetch', fetchMock);
+    const near = { lat: 18.6111, lon: 72.8295, name: 'Near' };
+    const far = { lat: 18.60895, lon: 72.8295, name: 'Far' };
+    expect(findNearestIndianPreset(near.lat, near.lon).distanceKm).toBeCloseTo(49.87, 2);
+    expect(findNearestIndianPreset(far.lat, far.lon).distanceKm).toBeCloseTo(50.11, 2);
+
+    const [first, second] = farFirst
+      ? [fetchAirQualityForCoords(far), fetchAirQualityForCoords(near)]
+      : [fetchAirQualityForCoords(near), fetchAirQualityForCoords(far)];
+    const [nearResult, farResult] = farFirst ? [second, first] : [first, second];
+    await Promise.all([
+      expect(nearResult).resolves.toMatchObject({
+        city: { name: 'Near' }, dataSource: 'city_preset', fallbackDistanceKm: 49.9,
+      }),
+      expect(farResult).rejects.toBeInstanceOf(LiveAqUnavailableError),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshes liveAq.sourceLabel for caller town name on 0.05 deg quantized cache hit', async () => {
     vi.stubGlobal(
       'fetch',
@@ -126,5 +208,66 @@ describe('GET /api/aqi pan-India coordinates, IST timestamps, and fallbacks', ()
     expect(second.status).toBe(200);
     expect(second.body.cached).toBe(true);
     expect(second.body.liveAq.sourceLabel).toContain('AmerRoad');
+  });
+
+  it('rejects non-JSON Content-Type & >256KB streamed bodies in fetchBoundedJson and isolates concurrent singleflight labels', async () => {
+    clearAirQualityCache();
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response('<html>bad</html>', {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(new Uint8Array(1024), {
+            status: 200,
+            headers: { 'content-type': 'application/json', 'content-length': '9999999' },
+          }),
+        ),
+    );
+    expect(await fetchBoundedJson('https://example.test/html', 1000)).toBeNull();
+    expect(await fetchBoundedJson('https://example.test/huge', 1000, 512)).toBeNull();
+
+    const oversizedStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(600));
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValueOnce(
+        new Response(oversizedStream, {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+    expect(await fetchBoundedJson('https://example.test/stream-big', 1000, 500)).toBeNull();
+
+    expect(Number.isFinite(haversineKm(0, 0, 0, 180))).toBe(true);
+    expect(normalizeObservedAt('2026-11-25T09:15:30')).toBe('2026-11-25T09:15:30+05:30');
+    expect(normalizeObservedAt('   ')).toBeUndefined();
+    expect(normalizeObservedAt('2026-11-25T09:15:30Z')).toBe('2026-11-25T09:15:30Z');
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          current: { pm2_5: 145, pm10: 190, nitrogen_dioxide: 30, time: '2026-11-26T14:00' },
+        }),
+      ),
+    );
+    const app = createApp();
+    const [r1, r2] = await Promise.all([
+      request(app).get('/api/aqi?lat=26.91&lon=75.79&name=TownAlpha&state=Rajasthan'),
+      request(app).get('/api/aqi?lat=26.91&lon=75.79&name=TownBeta&state=Rajasthan'),
+    ]);
+    expect(r1.body.city.name).toBe('TownAlpha');
+    expect(r2.body.city.name).toBe('TownBeta');
   });
 });

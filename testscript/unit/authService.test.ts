@@ -5,14 +5,18 @@ import {
   type PublicUser,
 } from '../../server/config/authAccounts.js';
 import {
+  clearRevokedSessionTokens,
   SESSION_COOKIE_NAME,
   buildClearSessionCookie,
   buildSessionCookie,
   extractSessionToken,
+  revokeSessionToken,
   signSessionToken,
   verifyCredentials,
+  verifyCredentialsAsync,
   verifySessionToken,
 } from '../../server/services/authService.js';
+import { getEnvConfig } from '../../server/config/env.js';
 import {
   getUserPreferences,
   setUserPreferences,
@@ -51,11 +55,10 @@ function buildProfile(overrides: Partial<UserProfile> = {}): UserProfile {
 describe('authAccounts & verifyCredentials', () => {
   it('normalizes email casing and whitespace in findAccountByEmail', () => {
     const account = findAccountByEmail('  FAMILY.EVAL@SMOGWISE.IN  ');
-    expect(account).toBeDefined();
+    expect(account?.id).toBe('eval_family');
     if (account === undefined) {
       return;
     }
-    expect(account.id).toBe('eval_family');
     expect(toPublicUser(account)).toEqual(SAMPLE_USER);
     expect('passwordHash' in toPublicUser(account)).toBe(false);
   });
@@ -134,6 +137,34 @@ describe('signSessionToken & verifySessionToken', () => {
     const nowMs = 1_795_000_000_000;
     const token = signSessionToken(SAMPLE_USER, nowMs);
     expect(verifySessionToken(token, nowMs + 90_000_000)).toBeNull();
+  });
+
+  it('authenticates asynchronously with verifyCredentialsAsync and honors jti revocation', async () => {
+    vi.stubEnv('AUTH_SECRET', TEST_AUTH_SECRET);
+    clearRevokedSessionTokens();
+    const okUser = await verifyCredentialsAsync('family.eval@smogwise.in', 'SmogWise#Eval2026');
+    expect(okUser).toEqual(SAMPLE_USER);
+    expect(await verifyCredentialsAsync('family.eval@smogwise.in', 'Wrong#2026')).toBeNull();
+    expect(await verifyCredentialsAsync('unknown@smogwise.in', 'SmogWise#Eval2026')).toBeNull();
+
+    const nowMs = Date.now();
+    const token = signSessionToken(SAMPLE_USER, nowMs);
+    expect(verifySessionToken(token, nowMs + 1000)).toEqual(SAMPLE_USER);
+    revokeSessionToken(token);
+    expect(verifySessionToken(token, nowMs + 1000)).toBeNull();
+    clearRevokedSessionTokens();
+
+    expect(verifySessionToken(token, nowMs - 120_000)).toBeNull();
+  });
+
+  it('parses TRUST_PROXY and returns safe env config', () => {
+    vi.stubEnv('TRUST_PROXY', '1');
+    vi.stubEnv('PORT', '4099');
+    vi.stubEnv('ALLOWED_ORIGIN', 'https://smogwise.example');
+    const cfg = getEnvConfig();
+    expect(cfg.trustProxy).toBe(true);
+    expect(cfg.port).toBe(4099);
+    expect(cfg.allowedOrigin).toBe('https://smogwise.example');
   });
 });
 

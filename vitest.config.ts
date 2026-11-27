@@ -7,6 +7,7 @@ export default defineConfig({
     include: ['testscript/**/*.test.{ts,tsx}'],
     coverage: {
       provider: 'v8',
+      reporter: ['text', 'json-summary'],
       include: ['src/**/*.{ts,tsx}', 'server/**/*.ts', 'api/**/*.ts'],
       exclude: [
         'testscript/**',
@@ -15,12 +16,13 @@ export default defineConfig({
         '*.config.*',
         'src/main.tsx',
         'src/domain/types.ts',
+        'server/index.ts',
       ],
       thresholds: {
-        statements: 85,
-        branches: 75,
-        functions: 85,
-        lines: 85,
+        statements: 92,
+        branches: 85,
+        functions: 92,
+        lines: 92,
       },
     },
   },

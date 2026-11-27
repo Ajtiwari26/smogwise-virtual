@@ -13,6 +13,15 @@ interface BreakpointBand {
   readonly iHi: number;
 }
 
+type SixBreakpointBands = readonly [
+  BreakpointBand,
+  BreakpointBand,
+  BreakpointBand,
+  BreakpointBand,
+  BreakpointBand,
+  BreakpointBand,
+];
+
 /** Calculated CPCB NAQI output with dominant pollutant attribution. */
 export interface CpcbAqiResult {
   readonly aqi: number;
@@ -20,7 +29,7 @@ export interface CpcbAqiResult {
   readonly dominantPollutant: DominantPollutant;
 }
 
-const PM25_BANDS: readonly BreakpointBand[] = [
+const PM25_BANDS: SixBreakpointBands = [
   { bpLo: 0, bpHi: 30, iLo: 0, iHi: 50 },
   { bpLo: 30, bpHi: 60, iLo: 51, iHi: 100 },
   { bpLo: 60, bpHi: 90, iLo: 101, iHi: 200 },
@@ -29,7 +38,7 @@ const PM25_BANDS: readonly BreakpointBand[] = [
   { bpLo: 250, bpHi: 500, iLo: 401, iHi: 500 },
 ];
 
-const PM10_BANDS: readonly BreakpointBand[] = [
+const PM10_BANDS: SixBreakpointBands = [
   { bpLo: 0, bpHi: 50, iLo: 0, iHi: 50 },
   { bpLo: 50, bpHi: 100, iLo: 51, iHi: 100 },
   { bpLo: 100, bpHi: 250, iLo: 101, iHi: 200 },
@@ -38,7 +47,7 @@ const PM10_BANDS: readonly BreakpointBand[] = [
   { bpLo: 430, bpHi: 600, iLo: 401, iHi: 500 },
 ];
 
-const NO2_BANDS: readonly BreakpointBand[] = [
+const NO2_BANDS: SixBreakpointBands = [
   { bpLo: 0, bpHi: 40, iLo: 0, iHi: 50 },
   { bpLo: 40, bpHi: 80, iLo: 51, iHi: 100 },
   { bpLo: 80, bpHi: 180, iLo: 101, iHi: 200 },
@@ -51,10 +60,9 @@ function isValidConcentration(value: number | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
-function computeSubIndex(concentration: number, bands: readonly BreakpointBand[]): number {
+function computeSubIndex(concentration: number, bands: SixBreakpointBands): number {
   const clamped = Math.max(0, concentration);
-  const lastBand = bands[bands.length - 1] as BreakpointBand;
-  const band = bands.find((item) => clamped <= item.bpHi) ?? lastBand;
+  const band = bands.find((item) => clamped <= item.bpHi) ?? bands[5];
   if (clamped >= band.bpHi) {
     return band.iHi;
   }
@@ -66,9 +74,7 @@ function computeSubIndex(concentration: number, bands: readonly BreakpointBand[]
   return Math.max(band.iLo, Math.min(band.iHi, Math.round(raw)));
 }
 
-/**
- * Maps a numeric CPCB AQI value (0-500) to its CPCB category band identifier.
- */
+/** Maps a numeric CPCB AQI to its severity band. */
 export function mapCpcbAqiToBand(aqi: number): AqiBandId {
   const safeAqi = Number.isFinite(aqi) ? Math.max(0, Math.min(500, Math.round(aqi))) : 0;
   if (safeAqi <= 50) {

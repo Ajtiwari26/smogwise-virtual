@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { clampFinite, isPlainRecord, round2, round4 } from '../../src/domain/domainUtils.js';
 import {
   computeExposureMetrics,
   computeHourlyInversionCurve,
   computeIndoorSeries,
+  computeSteadyStateIndoor,
 } from '../../src/domain/exposureEngine.js';
 import type { IAQHackId, UserProfile } from '../../src/domain/types.js';
 
@@ -71,6 +73,39 @@ describe('exposureEngine intervention deltas & edge cases', () => {
       );
       expect(metrics.doseReductionUgPerDay).toBeGreaterThan(0);
     }
+
+    const sealedOnly = computeExposureMetrics(makeProfile({ activeHacks: ['window_sealing'] }), 260);
+    const sealedPlusVent = computeExposureMetrics(
+      makeProfile({ activeHacks: ['window_sealing', 'ventilation_window'] }),
+      260,
+    );
+    expect(sealedPlusVent).toEqual(sealedOnly);
+    expect(sealedPlusVent.hourlySeries?.some((point) => point.isOptimalVentilation)).toBe(false);
+  });
+
+  it('reduces dose with ventilation when cleaner outdoor air can flush residual cooking PM2.5', () => {
+    const profile = makeProfile({ cookingFuel: 'biomass_chulha', roomVolumeM3: 12 });
+    for (const activeHacks of [[], ['window_sealing']] satisfies readonly IAQHackId[][]) {
+      const closed = computeExposureMetrics({ ...profile, activeHacks }, 0);
+      const open = computeExposureMetrics({
+        ...profile,
+        activeHacks: [...activeHacks, 'ventilation_window'],
+      }, 0);
+      expect(open.hourlySeries?.[13]?.isOptimalVentilation).toBe(true);
+      expect(open.optimizedIndoorPm25).toBeLessThan(closed.optimizedIndoorPm25);
+      expect(open.optimizedInhaledUgPerDay).toBeLessThan(closed.optimizedInhaledUgPerDay);
+    }
+  });
+
+  it('keeps windows closed at mild outdoor levels when sealing and HEPA make indoor air cleaner', () => {
+    const profile = makeProfile({ activeHacks: ['window_sealing', 'hepa_purifier'] });
+    const closed = computeExposureMetrics(profile, 75);
+    const withVent = computeExposureMetrics({
+      ...profile,
+      activeHacks: [...profile.activeHacks, 'ventilation_window'],
+    }, 75);
+    expect(withVent.hourlySeries?.[14]?.isOptimalVentilation).toBe(false);
+    expect(withVent).toEqual(closed);
   });
 
   it('scales inhaled dose upward when a vulnerable member is present', () => {
@@ -114,5 +149,29 @@ describe('exposureEngine intervention deltas & edge cases', () => {
         metrics.baselineInhaledUgPerDay,
       );
     }
+  });
+
+  it('guards NaN, Infinity, zero volume, zero denominator, and empty series safely', () => {
+    expect(computeIndoorSeries([], makeProfile(), true)).toEqual([]);
+    expect(computeSteadyStateIndoor(0.6, 0.8, 120, 500, 0, 0.2, 100)).toBe(120);
+    expect(computeSteadyStateIndoor(Number.NaN, 0.8, 120, 500, 45, 0.2, 100)).toBe(120);
+    expect(computeSteadyStateIndoor(0.6, 0, 120, 500, 45, 0, 0)).toBe(120);
+
+    const nanMetrics = computeExposureMetrics(makeProfile(), Number.NaN);
+    expect(nanMetrics.baselineIndoorPm25).toBeGreaterThanOrEqual(0);
+    expect(Number.isFinite(nanMetrics.baselineInhaledUgPerDay)).toBe(true);
+    const infMetrics = computeExposureMetrics(makeProfile(), Number.POSITIVE_INFINITY);
+    expect(infMetrics.baselineInhaledUgPerDay).toBe(nanMetrics.baselineInhaledUgPerDay);
+
+    expect(clampFinite(Number.NaN, 1, 10, 5)).toBe(5);
+    expect(clampFinite(-5, 1, 10, 5)).toBe(1);
+    expect(clampFinite(25, 1, 10, 5)).toBe(10);
+    expect(round2(1.005 + Number.EPSILON)).toBe(1.01);
+    expect(round2(Number.NaN)).toBe(0);
+    expect(round4(28.123456)).toBe(28.1235);
+    expect(round4(Number.POSITIVE_INFINITY)).toBe(0);
+    expect(isPlainRecord({ ok: true })).toBe(true);
+    expect(isPlainRecord([1, 2])).toBe(false);
+    expect(isPlainRecord(null)).toBe(false);
   });
 });

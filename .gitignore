@@ -3,10 +3,10 @@ dist/
 coverage/
 .vitest/
 .env
-.env.local
+.env.*
+!.env.example
 .etta/
+.code-review-graph/
 .vercel/
 testscript/reports/
 .DS_Store
-.vercel
-.env*

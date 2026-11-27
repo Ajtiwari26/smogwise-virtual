@@ -6,8 +6,10 @@ import { Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import type { LanguageCode } from '../domain/types.js';
 
+/** Props for the ErrorBoundary component. */
 export interface ErrorBoundaryProps {
   readonly language: LanguageCode;
+  readonly resetKey?: string;
   readonly children: ReactNode;
 }
 
@@ -24,11 +26,19 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   public override componentDidCatch(_error: Error, _info: ErrorInfo): void {
-    // Error state is already captured in getDerivedStateFromError
+    // Error state is captured in getDerivedStateFromError for fallback rendering
+  }
+
+  public override componentDidUpdate(prevProps: ErrorBoundaryProps): void {
+    if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ hasError: false });
+    }
   }
 
   private readonly handleReset = (): void => {
-    this.setState({ hasError: false });
+    this.setState({ hasError: false }, () => {
+      document.getElementById('main-content')?.focus();
+    });
   };
 
   public override render(): ReactNode {
@@ -40,7 +50,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       <section
         role="alert"
         aria-live="assertive"
-        className="mx-auto my-6 max-w-2xl rounded-2xl border border-rose-200 bg-rose-50/90 p-6 shadow-sm"
+        className="mx-auto my-6 max-w-2xl rounded-2xl border border-rose-300 bg-rose-50/90 p-6 shadow-sm"
       >
         <h2 className="text-base font-semibold text-rose-900">
           {isHindi

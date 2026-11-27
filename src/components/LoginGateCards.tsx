@@ -1,11 +1,13 @@
+/**
+ * Evaluator sandbox 1-click access card and gateway security highlights strip.
+ */
+
 import React from 'react';
 import type { LanguageCode, PersonaType } from '../domain/types.js';
 
-/** Public Evaluator Sandbox Test Password matching server/config/authAccounts.ts. */
-export const SANDBOX_DEMO_PASSCODE = 'SmogWise#Eval2026';
+const SANDBOX_DEMO_PASSCODE = 'SmogWise#Eval2026';
 
-/** Evaluator sandbox account entry for 1-click sign-in and credential reference. */
-export interface EvaluatorSandboxAccount {
+interface EvaluatorSandboxAccount {
   readonly email: string;
   readonly personaId: PersonaType;
   readonly labelEn: string;
@@ -13,8 +15,7 @@ export interface EvaluatorSandboxAccount {
   readonly cityEn: string;
 }
 
-/** Exact 5 pre-seeded evaluator accounts matching server/config/authAccounts.ts. */
-export const EVALUATOR_SANDBOX_ACCOUNTS: readonly EvaluatorSandboxAccount[] = [
+const EVALUATOR_SANDBOX_ACCOUNTS: readonly EvaluatorSandboxAccount[] = [
   {
     email: 'family.eval@smogwise.in',
     personaId: 'young_family',
@@ -87,7 +88,7 @@ export const EvaluatorSandboxCard: React.FC<EvaluatorSandboxCardProps> = React.m
               type="button"
               disabled={isSubmitting}
               onClick={() => onQuickLogin(acc.email, SANDBOX_DEMO_PASSCODE)}
-              className="flex flex-col items-start rounded-lg border border-slate-400 bg-slate-50 px-3.5 py-2.5 text-left transition hover:border-teal-800 hover:bg-teal-50 focus-visible:ring-2 focus-visible:ring-teal-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex flex-col items-start rounded-lg border border-slate-500 bg-slate-50 px-3.5 py-2.5 text-left transition hover:border-teal-800 hover:bg-teal-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <span className="text-sm font-bold text-slate-900">
                 {isHi ? acc.labelHi : acc.labelEn}
@@ -128,7 +129,7 @@ export const SecurityHighlightsStrip: React.FC<SecurityHighlightsStripProps> = R
       {
         title: isHi ? 'साल्टेड scrypt प्रमाणीकरण' : 'Salted scrypt Authentication',
         detail: isHi
-          ? 'crypto.scryptSync और timingSafeEqual द्वारा सुरक्षित पासवर्ड सत्यापन।'
+          ? 'साल्टेड scrypt और timingSafeEqual द्वारा सुरक्षित पासवर्ड सत्यापन।'
           : 'Constant-time password verification using salted scrypt and timingSafeEqual.',
       },
       {

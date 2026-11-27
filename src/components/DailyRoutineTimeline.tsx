@@ -1,3 +1,7 @@
+/**
+ * Displays low-emission morning/afternoon/evening/night routine cards with science notes.
+ */
+
 import React from 'react';
 import type { DailyRoutineBlock, LanguageCode } from '../domain/types.js';
 
@@ -10,6 +14,30 @@ export interface DailyRoutineTimelineProps {
   readonly plantsVsHepaCitation?: string;
 }
 
+const RoutineScienceNote: React.FC<{
+  readonly isHi: boolean;
+  readonly plantsVsHepaCitation?: string;
+}> = React.memo(function RoutineScienceNote({ isHi, plantsVsHepaCitation }) {
+  return (
+    <aside
+      aria-label={isHi ? 'एयर प्यूरीफायर बनाम इनडोर पौधे विज्ञान नोट' : 'Purifier vs. Houseplants Advisory'}
+      className="mt-3 rounded-md border border-slate-400 bg-slate-100 p-3 text-xs text-slate-900"
+    >
+      <p className="font-bold">
+        {isHi
+          ? 'वैज्ञानिक सलाह: HEPA / CR बॉक्स बनाम इनडोर पौधे'
+          : 'Air Cleaning Reality Check: HEPA / CR Box vs. Houseplants'}
+        {plantsVsHepaCitation !== undefined ? ` [${plantsVsHepaCitation}]` : ''}
+      </p>
+      <p className="mt-1 text-slate-800">
+        {isHi
+          ? 'गंभीर सर्दियों के स्मॉग में सामान्य इनडोर पौधे नगण्य PM2.5 घटाते हैं (CADR < 1 m³/घंटा); कमरे को <= 30 ug/m3 पर रखने के लिए H13 HEPA प्यूरीफायर या DIY कोर्सी-रोसेंथल बॉक्स (CADR > 250 m³/घंटा) का उपयोग करें।'
+          : 'Houseplants remove negligible PM2.5 during severe winter smog (CADR < 1 m³/h). Rely on a true H13 HEPA purifier or DIY Corsi-Rosenthal box (CADR > 250 m³/h) plus window sealing to hold indoor PM2.5 <= 30 ug/m3.'}
+      </p>
+    </aside>
+  );
+});
+
 /** Displays low-emission morning/afternoon/evening/night routine cards. */
 export const DailyRoutineTimeline: React.FC<DailyRoutineTimelineProps> = React.memo(
   function DailyRoutineTimeline({
@@ -20,7 +48,6 @@ export const DailyRoutineTimeline: React.FC<DailyRoutineTimelineProps> = React.m
     plantsVsHepaCitation,
   }) {
     const isHi = language === 'hi';
-
     return (
       <section
         id="routine"
@@ -33,21 +60,17 @@ export const DailyRoutineTimeline: React.FC<DailyRoutineTimelineProps> = React.m
           </h2>
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-slate-900 px-2.5 py-0.5 text-xs font-semibold text-white">
-              {isHi ? 'इनडोर लक्ष्य: < 30 ug/m3' : 'Indoor Target: < 30 ug/m3'}
+              {isHi ? 'इनडोर लक्ष्य: <= 30 ug/m3' : 'Indoor Target: <= 30 ug/m3'}
               {indoorTargetCitation !== undefined ? ` [${indoorTargetCitation}]` : ''}
             </span>
             <span className="rounded-full bg-teal-800 px-2.5 py-0.5 text-xs font-semibold text-white">
-              {isHi ? 'सर्वोत्तम वेंटिलेशन' : 'Best Ventilation'}: {optimalVentilationWindow}
+              {isHi ? 'दोपहर की वायु जाँच' : 'Afternoon Air Check'}: {optimalVentilationWindow}
             </span>
           </div>
         </div>
-
         <ol className="mt-3 space-y-2.5">
           {routine.map((block) => (
-            <li
-              key={block.id}
-              className="rounded-md border border-slate-200 bg-slate-50 p-3"
-            >
+            <li key={block.id} className="rounded-md border border-slate-300 bg-slate-50 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-bold text-teal-800">{block.timeRange}</span>
                 <span className="text-xs font-medium text-slate-700">
@@ -60,23 +83,10 @@ export const DailyRoutineTimeline: React.FC<DailyRoutineTimelineProps> = React.m
             </li>
           ))}
         </ol>
-
-        <aside
-          aria-label={isHi ? 'एयर प्यूरीफायर बनाम इनडोर पौधे विज्ञान नोट' : 'Purifier vs. Houseplants Advisory'}
-          className="mt-3 rounded-md border border-slate-300 bg-slate-100 p-3 text-xs text-slate-900"
-        >
-          <p className="font-bold">
-            {isHi
-              ? 'वैज्ञानिक सलाह: HEPA / CR बॉक्स बनाम इनडोर पौधे'
-              : 'Air Cleaning Reality Check: HEPA / CR Box vs. Houseplants'}
-            {plantsVsHepaCitation !== undefined ? ` [${plantsVsHepaCitation}]` : ''}
-          </p>
-          <p className="mt-1 text-slate-800">
-            {isHi
-              ? 'गंभीर सर्दियों के स्मॉग में सामान्य इनडोर पौधे नगण्य PM2.5 घटाते हैं (CADR < 1 m³/घंटा); कमरे को < 30 ug/m3 पर रखने के लिए H13 HEPA प्यूरीफायर या DIY कोर्सी-रोसेंथल बॉक्स (CADR > 250 m³/घंटा) का उपयोग करें।'
-              : 'Houseplants remove negligible PM2.5 during severe winter smog (CADR < 1 m³/h). Rely on a true H13 HEPA purifier or DIY Corsi-Rosenthal box (CADR > 250 m³/h) plus window sealing to hold indoor PM2.5 < 30 ug/m3.'}
-          </p>
-        </aside>
+        <RoutineScienceNote
+          isHi={isHi}
+          {...(plantsVsHepaCitation !== undefined ? { plantsVsHepaCitation } : {})}
+        />
       </section>
     );
   },

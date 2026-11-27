@@ -4,6 +4,7 @@
 
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { CriterionKey, DeductionItem } from './types.js';
@@ -15,7 +16,9 @@ const SKIP_DIR_NAMES: ReadonlySet<string> = new Set([
   'dist',
   'coverage',
   '.etta',
+  '.code-review-graph',
   '.git',
+  '.vitest',
 ]);
 
 const SKIP_REL_PATHS: ReadonlySet<string> = new Set(['testscript/reports']);
@@ -23,17 +26,21 @@ const SKIP_REL_PATHS: ReadonlySet<string> = new Set(['testscript/reports']);
 const DEFAULT_SHELL_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
 
+/** Result returned by runShellCapture without invoking a subshell. */
 export interface ShellCaptureResult {
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;
 }
 
-/**
- * Clamps a numeric value to the inclusive [min, max] range.
- */
+/** Type guard verifying that an unknown value is a non-null, non-array plain record. */
+export function isPlainRecord(val: unknown): val is Record<string, unknown> {
+  return typeof val === 'object' && val !== null && !Array.isArray(val);
+}
+
+/** Clamps a numeric value to the inclusive [min, max] range. */
 export function clamp(val: number, min: number, max: number): number {
-  if (val < min) {
+  if (!Number.isFinite(val) || val < min) {
     return min;
   }
   if (val > max) {
@@ -42,11 +49,28 @@ export function clamp(val: number, min: number, max: number): number {
   return val;
 }
 
-/**
- * Rounds a number to two decimal places.
- */
+/** Rounds a number to two decimal places. */
 export function round2(val: number): number {
   return Math.round(val * 100) / 100;
+}
+
+/** Reads a UTF-8 file safely, returning empty string when missing or unreadable. */
+export function readFileSafe(filePath: string): string {
+  try {
+    return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+  } catch (err: unknown) {
+    void err;
+    return '';
+  }
+}
+
+/** Reads up to maxChars from filePath, returning `[MISSING]` when absent. */
+export function readExcerpt(filePath: string, maxChars: number): string {
+  if (!fs.existsSync(filePath)) {
+    return '[MISSING]';
+  }
+  const raw = readFileSafe(filePath);
+  return raw.length > maxChars ? `${raw.slice(0, maxChars)}\n...[truncated]` : raw;
 }
 
 function shouldSkipDir(rootDir: string, fullPath: string, name: string): boolean {
@@ -84,9 +108,7 @@ function walkSourceDir(
   }
 }
 
-/**
- * Recursively lists source files under rootDir, skipping ignored directories.
- */
+/** Recursively lists source files under rootDir, skipping ignored directories. */
 export function listSourceFiles(
   rootDir: string,
   exts: readonly string[] = DEFAULT_EXTS,
@@ -97,34 +119,34 @@ export function listSourceFiles(
   return results;
 }
 
-/**
- * Dynamically imports a local module by absolute path, returning null on failure.
- */
-export async function safeDynamicImport<T>(absPath: string): Promise<T | null> {
+/** Dynamically imports a local module by absolute path, returning null on failure. */
+export async function safeDynamicImport(
+  absPath: string,
+): Promise<Record<string, unknown> | null> {
   if (!fs.existsSync(absPath)) {
     return null;
   }
   try {
     const modUrl = pathToFileURL(absPath).href;
     const loaded: unknown = await import(modUrl);
-    return loaded as T;
-  } catch {
+    return isPlainRecord(loaded) ? loaded : null;
+  } catch (err: unknown) {
+    void err;
     return null;
   }
 }
 
-type ExitError = { readonly code?: string | number | null | undefined };
-
-function extractExitCode(err: ExitError | null): number {
-  if (err === null) {
+function extractExitCode(err: unknown): number {
+  if (err === null || err === undefined) {
     return 0;
   }
-  return typeof err.code === 'number' ? err.code : 1;
+  if (isPlainRecord(err) && typeof err['code'] === 'number') {
+    return err['code'];
+  }
+  return -1;
 }
 
-/**
- * Runs a command without a shell and captures exit code, stdout, and stderr.
- */
+/** Runs a command without a shell and captures exit code, stdout, and stderr. */
 export function runShellCapture(
   cmd: string,
   args: readonly string[],
@@ -150,9 +172,7 @@ export function runShellCapture(
   });
 }
 
-/**
- * Constructs a normalized DeductionItem with rounded points.
- */
+/** Constructs a normalized DeductionItem with rounded points. */
 export function makeDeduction(
   criterion: CriterionKey,
   points: number,
@@ -165,4 +185,91 @@ export function makeDeduction(
     evidence,
     fix,
   };
+}
+
+/** Extracts text output from `@google/genai` Interaction `output_text` or `outputs[].text`. */
+export function extractInteractionText(interaction: unknown): string {
+  if (!isPlainRecord(interaction)) {
+    return '';
+  }
+  const direct = interaction['output_text'];
+  if (typeof direct === 'string' && direct.trim().length > 0) {
+    return direct.trim();
+  }
+  const outputs = interaction['outputs'];
+  if (!Array.isArray(outputs)) {
+    return '';
+  }
+  for (const item of outputs) {
+    if (isPlainRecord(item) && typeof item['text'] === 'string' && item['text'].trim().length > 0) {
+      return item['text'].trim();
+    }
+  }
+  return '';
+}
+
+function isRequestListener(val: unknown): val is http.RequestListener {
+  return typeof val === 'function';
+}
+
+/** Resolves an Express RequestListener from an imported server/app.ts module without casts. */
+export function resolveExpressApp(
+  mod: Record<string, unknown> | null,
+): http.RequestListener | null {
+  if (mod === null) {
+    return null;
+  }
+  const createApp = mod['createApp'];
+  if (typeof createApp === 'function') {
+    const created: unknown = createApp();
+    if (isRequestListener(created)) {
+      return created;
+    }
+  }
+  const directApp = mod['app'] ?? mod['default'];
+  return isRequestListener(directApp) ? directApp : null;
+}
+
+/** Starts an ephemeral loopback HTTP server bound to an OS-assigned port. */
+export function startEphemeralServer(
+  listener: http.RequestListener,
+): Promise<{ readonly server: http.Server; readonly port: number; readonly baseUrl: string }> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer(listener);
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const rawAddr = server.address();
+      if (!isPlainRecord(rawAddr) || typeof rawAddr['port'] !== 'number') {
+        reject(new Error('Failed to bind ephemeral port.'));
+        return;
+      }
+      const port = rawAddr['port'];
+      resolve({ server, port, baseUrl: `http://127.0.0.1:${String(port)}` });
+    });
+  });
+}
+
+/** Closes an ephemeral HTTP server cleanly, forcing keep-alive sockets closed first. */
+export async function closeServerSafely(server: http.Server | null): Promise<void> {
+  if (server === null) {
+    return;
+  }
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
+/** Returns true only when this module was executed directly as the CLI entrypoint. */
+export function isMainModule(metaUrl: string): boolean {
+  const entry = process.argv[1];
+  if (typeof entry !== 'string' || entry.length === 0) {
+    return false;
+  }
+  try {
+    return pathToFileURL(path.resolve(entry)).href === metaUrl;
+  } catch (err: unknown) {
+    void err;
+    return false;
+  }
 }

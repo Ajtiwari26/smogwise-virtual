@@ -5,18 +5,22 @@
 
 import express from 'express';
 import type { Express, Request, Response } from 'express';
+import { getEnvConfig } from './config/env.js';
 import { rejectPrototypePollutionAndDepth } from './middleware/bodyGuard.js';
 import {
   centralizedErrorHandler,
   createCorsMiddleware,
   createCsrfOriginGuard,
+  createDefaultNoStoreMiddleware,
   createHelmetMiddleware,
   createJsonBodyParser,
   createPermissionsPolicyMiddleware,
+  createVaryOriginMiddleware,
 } from './middleware/security.js';
 import { createApiRouter } from './routes/apiRoutes.js';
 
 function handleNotFound(_req: Request, res: Response): void {
+  res.setHeader('Cache-Control', 'private, no-store');
   res.status(404).json({ error: 'Not found.' });
 }
 
@@ -26,9 +30,13 @@ function handleNotFound(_req: Request, res: Response): void {
 export function createApp(): Express {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 1);
+  if (getEnvConfig().trustProxy) {
+    app.set('trust proxy', 1);
+  }
 
+  app.use(createDefaultNoStoreMiddleware());
   app.use(createHelmetMiddleware());
+  app.use(createVaryOriginMiddleware());
   app.use(createCorsMiddleware());
   app.use(createCsrfOriginGuard());
   app.use(createJsonBodyParser());

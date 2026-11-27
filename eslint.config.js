@@ -5,7 +5,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
   {
-    ignores: ['dist/', 'node_modules/', '.etta/', 'coverage/', '.vitest/'],
+    ignores: ['dist/', 'node_modules/', '.etta/', '.code-review-graph/', 'coverage/', '.vitest/'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -13,9 +13,11 @@ export default tseslint.config(
     files: ['**/*.{ts,tsx}'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-non-null-assertion': 'error',
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
-      complexity: ['error', 10],
+      'no-empty': 'error',
+      complexity: ['error', 9],
       'max-len': [
         'error',
         {
@@ -25,11 +27,23 @@ export default tseslint.config(
           ignoreTemplateLiterals: true,
         },
       ],
-      'max-lines-per-function': ['warn', 80],
     },
   },
   {
-    files: ['src/**/*.{ts,tsx}'],
+    files: [
+      'src/**/*.{ts,tsx}',
+      'server/**/*.ts',
+      'api/**/*.ts',
+      'testscript/evaluator/**/*.ts',
+      'dev.ts',
+    ],
+    rules: {
+      'max-lines-per-function': ['error', { max: 55, skipBlankLines: true, skipComments: true }],
+      'max-lines': ['error', { max: 245, skipBlankLines: true, skipComments: true }],
+    },
+  },
+  {
+    files: ['src/**/*.{ts,tsx}', 'server/**/*.ts', 'api/**/*.ts'],
     rules: {
       'no-console': 'error',
     },

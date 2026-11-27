@@ -4,32 +4,33 @@
 
 import express from 'express';
 import type { NextFunction, Request, RequestHandler, Response, Router } from 'express';
-import type { PublicUser } from '../config/authAccounts.js';
+import { type PublicUser } from '../config/authAccounts.js';
 import { getEnvConfig } from '../config/env.js';
-import { LoginSchema, UserProfileSchema } from '../middleware/promptGuard.js';
-import { requireAuth, type AuthenticatedRequest } from '../middleware/requireAuth.js';
+import { LoginSchema } from '../middleware/requestSchemas.js';
+import { getAuthenticatedUser, requireAuth } from '../middleware/requireAuth.js';
 import {
   buildClearSessionCookie,
   buildSessionCookie,
   extractSessionToken,
+  revokeSessionToken,
   signSessionToken,
-  verifyCredentials,
+  verifyCredentialsAsync,
   verifySessionToken,
 } from '../services/authService.js';
 import { getUserPreferences, setUserPreferences } from '../services/preferencesStore.js';
-import { extractProfilePayload, toUserProfile } from './apiRouteHelpers.js';
+import { parsePreferencesProfile, wrapAsyncRoute } from './apiRouteHelpers.js';
 
 const NO_STORE_CACHE_CONTROL = 'private, no-store';
 
-function getAuthUser(req: Request): PublicUser | undefined {
-  return (req as AuthenticatedRequest).authUser;
+function shouldUseSecureCookie(req: Request): boolean {
+  return getEnvConfig().nodeEnv === 'production' || req.secure;
 }
 
-function handleLogin(req: Request, res: Response, next: NextFunction): void {
+async function handleLogin(req: Request, res: Response, next: NextFunction): Promise<void> {
   res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
   try {
     const parsed = LoginSchema.parse(req.body);
-    const user = verifyCredentials(parsed.email, parsed.password);
+    const user = await verifyCredentialsAsync(parsed.email, parsed.password);
     if (user === null) {
       res.status(401).json({
         error: 'INVALID_CREDENTIALS',
@@ -38,18 +39,20 @@ function handleLogin(req: Request, res: Response, next: NextFunction): void {
       return;
     }
     const token = signSessionToken(user);
-    const isProd = getEnvConfig().nodeEnv === 'production';
-    res.setHeader('Set-Cookie', buildSessionCookie(token, isProd));
+    res.setHeader('Set-Cookie', buildSessionCookie(token, shouldUseSecureCookie(req)));
     res.status(200).json({ user });
-  } catch (err) {
+  } catch (err: unknown) {
     next(err);
   }
 }
 
-function handleLogout(_req: Request, res: Response): void {
+function handleLogout(req: Request, res: Response): void {
   res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
-  const isProd = getEnvConfig().nodeEnv === 'production';
-  res.setHeader('Set-Cookie', buildClearSessionCookie(isProd));
+  const token = extractSessionToken(req.headers.cookie, req.headers.authorization);
+  if (token !== undefined) {
+    revokeSessionToken(token);
+  }
+  res.setHeader('Set-Cookie', buildClearSessionCookie(shouldUseSecureCookie(req)));
   res.status(200).json({ ok: true });
 }
 
@@ -66,11 +69,19 @@ function handleSession(req: Request, res: Response): void {
   res.status(200).json({ authenticated: false, user: null });
 }
 
-function handleGetPreferences(req: Request, res: Response): void {
-  res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
-  const authUser = getAuthUser(req);
+function requireAuthUser(res: Response): PublicUser | undefined {
+  const authUser = getAuthenticatedUser(res);
   if (authUser === undefined) {
     res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required.' });
+    return undefined;
+  }
+  return authUser;
+}
+
+function handleGetPreferences(_req: Request, res: Response): void {
+  res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
+  const authUser = requireAuthUser(res);
+  if (authUser === undefined) {
     return;
   }
   res.status(200).json({ profile: getUserPreferences(authUser.id) ?? null });
@@ -78,17 +89,15 @@ function handleGetPreferences(req: Request, res: Response): void {
 
 function handlePutPreferences(req: Request, res: Response, next: NextFunction): void {
   res.setHeader('Cache-Control', NO_STORE_CACHE_CONTROL);
-  const authUser = getAuthUser(req);
+  const authUser = requireAuthUser(res);
   if (authUser === undefined) {
-    res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required.' });
     return;
   }
   try {
-    const parsed = UserProfileSchema.parse(extractProfilePayload(req.body));
-    const profile = toUserProfile(parsed);
+    const profile = parsePreferencesProfile(req.body);
     setUserPreferences(authUser.id, profile);
     res.status(200).json({ profile });
-  } catch (err) {
+  } catch (err: unknown) {
     next(err);
   }
 }
@@ -100,8 +109,8 @@ export function createAuthRouter(
 ): Router {
   const router = express.Router();
 
-  router.post('/auth/login', authLimiter, handleLogin);
-  router.post('/auth/logout', authLimiter, handleLogout);
+  router.post('/auth/login', authLimiter, wrapAsyncRoute(handleLogin));
+  router.post('/auth/logout', sessionLimiter, handleLogout);
   router.get('/auth/session', sessionLimiter, handleSession);
   router.get('/user/preferences', sessionLimiter, requireAuth, handleGetPreferences);
   router.put('/user/preferences', sessionLimiter, requireAuth, handlePutPreferences);

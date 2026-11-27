@@ -1,14 +1,16 @@
 /**
  * SSRF-safe Open-Meteo Geocoding client restricted to India (countryCode=IN)
- * with 3.5s AbortController timeout, singleflight coalescing, 24h LRU caching,
- * and curated preset fallback.
+ * with 3.5s AbortController timeout, bounded JSON fetch, singleflight coalescing,
+ * 24h LRU caching, and curated preset fallback.
  */
 
 import { z } from 'zod';
 import { CITY_PRESETS, isWithinIndiaCoords } from '../../src/domain/cityPresets.js';
+import { round2 } from '../../src/domain/domainUtils.js';
 import type { LocationSearchItem } from '../../src/domain/types.js';
 import { createLruCache, createSingleflight, hashCacheKey } from '../cache/lruCache.js';
 import { sanitizeLocationText } from '../middleware/locationGuard.js';
+import { fetchBoundedJson } from './httpFetch.js';
 
 const OPEN_METEO_GEO_ENDPOINT = 'https://geocoding-api.open-meteo.com/v1/search';
 const FETCH_TIMEOUT_MS = 3500;
@@ -23,20 +25,16 @@ const GeocodingRawItemSchema = z.object({
 });
 
 const GeocodingResponseSchema = z.object({
-  results: z.array(GeocodingRawItemSchema).optional().default([]),
-});
+  results: z.array(GeocodingRawItemSchema).optional(),
+  generationtime_ms: z.number().nonnegative().optional(),
+  error: z.literal(false).optional(),
+}).refine((data) => data.results !== undefined || data.generationtime_ms !== undefined);
 
 const geoCache = createLruCache<readonly LocationSearchItem[]>(200, GEO_CACHE_TTL_MS);
-const geoSingleflight = createSingleflight<readonly LocationSearchItem[]>(100);
+const geoSingleflight = createSingleflight<readonly LocationSearchItem[] | null>(100);
 
 function normalizeQueryKey(rawQuery: string): string {
   return rawQuery.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-
-
-function roundTwoDecimals(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 function buildGeocodingUrl(cleanQuery: string): string {
@@ -51,7 +49,7 @@ function buildGeocodingUrl(cleanQuery: string): string {
 }
 
 function mapRawResult(raw: z.infer<typeof GeocodingRawItemSchema>): LocationSearchItem | null {
-  if (raw.country_code !== undefined && raw.country_code.toUpperCase() !== 'IN') {
+  if (raw.country_code?.toUpperCase() !== 'IN') {
     return null;
   }
   if (!isWithinIndiaCoords(raw.latitude, raw.longitude)) {
@@ -63,8 +61,8 @@ function mapRawResult(raw: z.infer<typeof GeocodingRawItemSchema>): LocationSear
   }
   const sanitizedState = sanitizeLocationText(raw.admin1 ?? 'India');
   const state = sanitizedState.length > 0 ? sanitizedState : 'India';
-  const lat = roundTwoDecimals(raw.latitude);
-  const lon = roundTwoDecimals(raw.longitude);
+  const lat = round2(raw.latitude);
+  const lon = round2(raw.longitude);
   return {
     id: `in_${String(lat)}_${String(lon)}`,
     name,
@@ -74,14 +72,14 @@ function mapRawResult(raw: z.infer<typeof GeocodingRawItemSchema>): LocationSear
   };
 }
 
-function parseGeocodingPayload(payload: unknown): readonly LocationSearchItem[] {
+function parseGeocodingPayload(payload: unknown): readonly LocationSearchItem[] | null {
   const parsed = GeocodingResponseSchema.safeParse(payload);
   if (!parsed.success) {
-    return [];
+    return null;
   }
   const mapped: LocationSearchItem[] = [];
   const seenIds = new Set<string>();
-  for (const raw of parsed.data.results) {
+  for (const raw of parsed.data.results ?? []) {
     const item = mapRawResult(raw);
     if (item !== null && !seenIds.has(item.id)) {
       seenIds.add(item.id);
@@ -102,8 +100,8 @@ function searchCuratedIndianPresets(cleanQuery: string): readonly LocationSearch
         id: preset.id,
         name: preset.name,
         state: preset.state,
-        lat: roundTwoDecimals(preset.lat),
-        lon: roundTwoDecimals(preset.lon),
+        lat: round2(preset.lat),
+        lon: round2(preset.lon),
       });
     }
   }
@@ -113,25 +111,11 @@ function searchCuratedIndianPresets(cleanQuery: string): readonly LocationSearch
 async function fetchOpenMeteoGeocoding(
   cleanQuery: string,
 ): Promise<readonly LocationSearchItem[] | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const response = await fetch(buildGeocodingUrl(cleanQuery), {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      redirect: 'error',
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      return null;
-    }
-    const payload: unknown = await response.json();
-    return parseGeocodingPayload(payload);
-  } catch {
+  const payload = await fetchBoundedJson(buildGeocodingUrl(cleanQuery), FETCH_TIMEOUT_MS);
+  if (payload === null) {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
+  return parseGeocodingPayload(payload);
 }
 
 /** Searches Indian cities via Open-Meteo Geocoding with 24h LRU & singleflight caching. */
@@ -143,18 +127,16 @@ export async function searchIndianLocations(
     return [];
   }
   const cacheKey = hashCacheKey({ service: 'open-meteo-geo', q: normalizeQueryKey(cleanQuery) });
-  const cached = geoCache.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  return geoSingleflight.run(cacheKey, async () => {
+  const results = geoCache.get(cacheKey) ?? await geoSingleflight.run(cacheKey, async () => {
     const remoteResults = await fetchOpenMeteoGeocoding(cleanQuery);
     if (remoteResults !== null) {
-      geoCache.set(cacheKey, remoteResults, GEO_CACHE_TTL_MS);
-      return remoteResults;
+      geoCache.set(cacheKey, remoteResults);
     }
-    return searchCuratedIndianPresets(cleanQuery);
+    return remoteResults;
   });
+  return results !== null && results.length > 0
+    ? results
+    : searchCuratedIndianPresets(cleanQuery);
 }
 
 /** Clears the in-memory geocoding LRU cache and in-flight map. */

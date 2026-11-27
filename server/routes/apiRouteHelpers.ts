@@ -1,26 +1,68 @@
 /**
- * Profile normalization and air-quality lookup helpers for SmogWise Express routes.
+ * Profile normalization, Express async route wrapping, and air-quality lookup helpers.
  */
 
+import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import type { z } from 'zod';
 import { resolveCityPreset } from '../../src/domain/cityPresets.js';
+import { isPlainRecord } from '../../src/domain/domainUtils.js';
 import type { LanguageCode, UserProfile } from '../../src/domain/types.js';
-import type { UserProfileSchema } from '../middleware/promptGuard.js';
+import { isUnsafeCityInput } from '../middleware/locationGuard.js';
+import {
+  PreferencesEnvelopeSchema,
+  UserProfileSchema,
+  WrappedProfileEnvelopeSchema,
+} from '../middleware/requestSchemas.js';
 import {
   fetchAirQualityForCity,
   fetchAirQualityForCoords,
-  isUnsafeCityInput,
+  LiveAqUnavailableError,
 } from '../services/openMeteoClient.js';
-import type { AirQualityLookupResult } from '../services/openMeteoClient.js';
+import type { AirQualityLookupResult } from '../services/openMeteoHelpers.js';
 
-export type ParsedProfile = z.infer<typeof UserProfileSchema>;
+/** Validated Express request profile shape inferred from UserProfileSchema. */
+type ParsedProfile = z.infer<typeof UserProfileSchema>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+/** Async Express handler signature handled safely by route wrappers. */
+type AsyncRouteHandler = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => Promise<void>;
+
+/** Async Express handler signature without explicit next forwarding boilerplate. */
+type AqRouteHandler = (req: Request, res: Response) => Promise<void>;
+
+/** Wraps an async Express route handler so rejected promises forward to error middleware. */
+export function wrapAsyncRoute(handler: AsyncRouteHandler): RequestHandler {
+  return (req, res, next) => {
+    void handler(req, res, next).catch(next);
+  };
 }
 
-/** Converts validated custom location fields into the domain CustomLocation shape. */
-export function toCustomLocation(
+function handleAqRouteError(res: Response, err: unknown, next: NextFunction): void {
+  if (err instanceof LiveAqUnavailableError) {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.status(503).json({ error: err.code, message: err.message });
+    return;
+  }
+  next(err);
+}
+
+/**
+ * Wraps an async AQ/plan route handler with private, no-store caching and
+ * unified LiveAqUnavailableError -> HTTP 503 mapping.
+ */
+export function wrapAqRoute(handler: AqRouteHandler): RequestHandler {
+  return (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    void handler(req, res).catch((err: unknown) => {
+      handleAqRouteError(res, err, next);
+    });
+  };
+}
+
+function toCustomLocation(
   raw: NonNullable<ParsedProfile['customLocation']>,
 ): NonNullable<UserProfile['customLocation']> {
   if (raw.state !== undefined && raw.state.length > 0) {
@@ -70,12 +112,38 @@ export function buildDefaultProfile(city?: string, language: LanguageCode = 'en'
   };
 }
 
-/** Extracts a profile object from either `{ profile }` wrappers or direct request bodies. */
-export function extractProfilePayload(body: unknown): unknown {
-  if (isRecord(body) && 'profile' in body) {
-    return body['profile'];
+/** Parsed `/api/plan` or `/api/plan/briefing` request payload and live-AQ flag. */
+interface ParsedPlanRequest {
+  readonly profile: UserProfile;
+  readonly useLiveAq: boolean;
+}
+
+/**
+ * Parses either a `{ profile, useLiveAq? }` envelope or a direct UserProfile payload
+ * for plan and briefing routes, preserving explicit `useLiveAq: false` flags.
+ */
+export function parsePlanRequest(body: unknown): ParsedPlanRequest {
+  if (isPlainRecord(body) && Object.hasOwn(body, 'profile')) {
+    const envelope = WrappedProfileEnvelopeSchema.parse(body);
+    return {
+      profile: toUserProfile(envelope.profile),
+      useLiveAq: envelope.useLiveAq ?? true,
+    };
   }
-  return body;
+  return {
+    profile: toUserProfile(UserProfileSchema.parse(body)),
+    useLiveAq: true,
+  };
+}
+
+/**
+ * Parses a strict `{ profile }` envelope or direct UserProfile payload for preferences storage.
+ */
+export function parsePreferencesProfile(body: unknown): UserProfile {
+  if (isPlainRecord(body) && Object.hasOwn(body, 'profile')) {
+    return toUserProfile(PreferencesEnvelopeSchema.parse(body).profile);
+  }
+  return toUserProfile(UserProfileSchema.parse(body));
 }
 
 /** Fetches live or fallback air quality for either custom coordinates or preset city IDs. */

@@ -5,14 +5,24 @@ import {
   StrictCoordSchema,
   stripCitationTags,
 } from '../../server/middleware/locationGuard.js';
+import { resolveCityPreset } from '../../src/domain/cityPresets.js';
 import { computeCpcbAqi } from '../../src/domain/cpcbAqi.js';
 import { buildRwaNotice, formatLocalizedSummary } from '../../src/domain/i18n.js';
 import { SAMPLE_SCENARIOS } from '../../src/domain/sampleScenarios.js';
 import {
+  compareWhatIf,
   computeDeterministicReport,
   computeFullPlan,
 } from '../../src/domain/impactService.js';
-import type { UserProfile } from '../../src/domain/types.js';
+import {
+  applyLiveAqOverride,
+  buildCitations,
+  deriveGrapStageFromPm25,
+  isSameLocationTarget,
+  resolveBaseCity,
+} from '../../src/domain/liveAqResolver.js';
+import { generateDailyRoutine } from '../../src/domain/routineBuilder.js';
+import type { DeterministicReport, UserProfile } from '../../src/domain/types.js';
 
 describe('computeCpcbAqi deterministic CPCB NAQI calculator', () => {
   it('maps concentrations across all 6 CPCB NAQI bands accurately', () => {
@@ -86,8 +96,8 @@ describe('SAMPLE_SCENARIOS deterministic plan integration', () => {
     );
     for (const scenario of SAMPLE_SCENARIOS) {
       const report = computeFullPlan(scenario.profile);
-      expect(report.citations['CALC:INDOOR_TARGET']).toBeDefined();
-      expect(report.citations['SCI:PLANTS_VS_HEPA']).toBeDefined();
+      expect(report.citations['CALC:INDOOR_TARGET']).toContain('ug/m3');
+      expect(report.citations['SCI:PLANTS_VS_HEPA']).toContain('HEPA/CR-box');
       expect(report.routine.length).toBeGreaterThan(0);
     }
   });
@@ -142,12 +152,12 @@ describe('persona differentiation, PM10 summary, RWA notice, and PM2.5-only live
     expect(commuter.report.exposure.baselineInhaledUgPerDay).toBeGreaterThan(familyDose);
     expect(student.report.exposure.baselineInhaledUgPerDay).toBeGreaterThan(familyDose);
 
-    const familyMorning = family.routine.find((s) => s.id === 'morning_inversion')?.title;
-    const commuterMorning = commuter.routine.find((s) => s.id === 'morning_inversion')?.title;
-    const studentMorning = student.routine.find((s) => s.id === 'morning_inversion')?.title;
+    const familyMorning = family.routine.find((s) => s.id === 'morning_inversion')?.title ?? '';
+    const commuterMorning = commuter.routine.find((s) => s.id === 'morning_inversion')?.title ?? '';
+    const studentMorning = student.routine.find((s) => s.id === 'morning_inversion')?.title ?? '';
 
-    expect(commuterMorning).toBeDefined();
-    expect(studentMorning).toBeDefined();
+    expect(commuterMorning).toContain('Rush-Hour');
+    expect(studentMorning).toContain('Campus');
     expect(commuterMorning).not.toBe(familyMorning);
     expect(studentMorning).not.toBe(familyMorning);
   });
@@ -227,5 +237,213 @@ describe('outdoor_student sports AQI threshold and commuting multiplier', () => 
     expect(highHi.routine.find((s) => s.id === 'afternoon_ventilation')?.description).toContain(
       'इनडोर खेल चुनें',
     );
+  });
+});
+
+describe('liveAqResolver, customLocation state, RWA 0-savings notice, and what-if deltas', () => {
+  it('resolves customLocation state safely and maps nearest preset without Delhi pollutant leak', () => {
+    const customCity = resolveBaseCity({
+      ...BASE_PROFILE,
+      cityId: 'delhi_anand_vihar',
+      customLocation: { name: 'Bandra', state: 'Maharashtra <script>', lat: 19.06, lon: 72.83 },
+    });
+    expect(customCity.name).toBe('Bandra, Maharashtra');
+    expect(customCity.state).toBe('Maharashtra');
+    expect(customCity.id).toBe('custom_bandra');
+    expect(customCity.baselinePm10).toBe(195);
+
+    const fallbackPreset = applyLiveAqOverride(customCity, {
+      pm25: 140,
+      fallbackStationName: 'Mumbai Bandra',
+      fallbackDistanceKm: 1.5,
+    });
+    expect(fallbackPreset.dataSource).toBe('city_preset');
+    expect(fallbackPreset.city.baselinePm10).toBe(customCity.baselinePm10);
+
+    const liveOverride = applyLiveAqOverride(customCity, { pm25: 260, no2: 44 });
+    expect(liveOverride.dataSource).toBe('live_open_meteo');
+    expect(liveOverride.city.baselinePm10).toBe(0);
+    expect(liveOverride.city.baselineNo2).toBe(44);
+    expect(liveOverride.city.grapStage).toBe('GRAP_IV');
+    expect(deriveGrapStageFromPm25(80)).toBe('NONE');
+    expect(deriveGrapStageFromPm25(120)).toBe('GRAP_I');
+    expect(deriveGrapStageFromPm25(180)).toBe('GRAP_II');
+    expect(deriveGrapStageFromPm25(220)).toBe('GRAP_III');
+    expect(applyLiveAqOverride(customCity, { pm25: Number.NaN }).dataSource).toBe('city_preset');
+  });
+
+  it('builds honest RWA notice when configured flats have petrol_car + lpg (0 kg saved) vs positive', () => {
+    const zeroSaveProfile: UserProfile = {
+      ...BASE_PROFILE,
+      commuteMode: 'petrol_car',
+      cookingFuel: 'lpg',
+      rwaHouseholds: 100,
+      rwaAdoptionRate: 0.5,
+    };
+    const zeroReport = computeDeterministicReport(zeroSaveProfile);
+    expect(buildRwaNotice(zeroSaveProfile, zeroReport)).toContain('0 kg CO2e avoided');
+    expect(buildRwaNotice({ ...zeroSaveProfile, language: 'hi' }, zeroReport)).toContain(
+      '0 kg CO2e',
+    );
+
+    const positiveProfile: UserProfile = { ...zeroSaveProfile, commuteMode: 'metro_bus' };
+    const positiveReport = computeDeterministicReport(positiveProfile);
+    expect(buildRwaNotice(positiveProfile, positiveReport)).toContain('50% adoption across 100 flats');
+    expect(buildRwaNotice({ ...positiveProfile, language: 'hi' }, positiveReport)).toContain(
+      '100 फ्लैट्स में 50%',
+    );
+  });
+
+  it('uses live AQ only for the location that supplied it in a what-if comparison', () => {
+    const baseline = { ...BASE_PROFILE, cityId: 'delhi' };
+    const alternative = { ...BASE_PROFILE, cityId: 'mumbai_bandra' };
+    const baselineLive = { pm25: 312, sourceLabel: 'Delhi live' };
+    const expectedAlternative = computeDeterministicReport(alternative);
+
+    const comparison = compareWhatIf(baseline, alternative, baselineLive, undefined);
+    expect(comparison.baseline.citations['AQ:SOURCE']).toBe('Delhi live');
+    expect(comparison.alternative).toEqual(expectedAlternative);
+    expect(comparison.citations['AQ:SOURCE']).toBe(expectedAlternative.citations['AQ:SOURCE']);
+    expect(compareWhatIf(baseline, alternative, baselineLive).alternative).toEqual(
+      expectedAlternative,
+    );
+
+    const alias = { ...baseline, cityId: 'delhi_anand_vihar' };
+    expect(compareWhatIf(baseline, alias, baselineLive).alternative.city.baselinePm25).toBe(312);
+    expect(compareWhatIf(baseline, alternative, baselineLive, { pm25: 42 }).alternative.city
+      .baselinePm25).toBe(42);
+  });
+
+  it.each([
+    { outdoor: 140, indoor: 180, canVentilate: false },
+    { outdoor: 50, indoor: 30, canVentilate: false },
+    { outdoor: 29, indoor: 30, canVentilate: true },
+  ])('compares outdoor $outdoor and indoor $indoor at the afternoon window', (
+    { outdoor, indoor, canVentilate },
+  ) => {
+    const report = computeDeterministicReport(BASE_PROFILE);
+    const { hourlySeries, ...exposure } = report.exposure;
+    expect(hourlySeries).toBeDefined();
+    const routine = generateDailyRoutine(BASE_PROFILE, {
+      ...report,
+      city: { ...report.city, baselinePm25: outdoor },
+      exposure: { ...exposure, optimizedIndoorPm25: indoor },
+    });
+    expect(routine.find((item) => item.id === 'afternoon_ventilation')?.description).toContain(
+      canVentilate ? 'Cross-ventilate' : 'Keep windows closed',
+    );
+  });
+
+  it.each([30, 30.01])('uses the inclusive indoor PM2.5 target at %s ug/m3', (indoorPm25) => {
+    const report = computeDeterministicReport(BASE_PROFILE);
+    const { hourlySeries, ...baseExposure } = report.exposure;
+    expect(hourlySeries).toBeDefined();
+    const exposure = { ...baseExposure, optimizedIndoorPm25: indoorPm25 };
+    const citations = buildCitations(report.city, report.dataSource, exposure, report.emissions);
+    const night = generateDailyRoutine(BASE_PROFILE, { ...report, exposure })
+      .find((item) => item.id === 'night_recovery');
+    const expected = indoorPm25 === 30 ? '<= 30 ug/m3' : '0.01 ug/m3 above';
+    expect(citations['CALC:INDOOR_TARGET']).toContain(expected);
+    expect(night?.description).toContain(expected);
+  });
+
+  it('formats negative emissions deltas honestly in compareWhatIf', () => {
+    const cleanBase: UserProfile = {
+      ...BASE_PROFILE,
+      commuteMode: 'metro_bus',
+      cookingFuel: 'induction',
+    };
+    const dirtyAlt: UserProfile = {
+      ...BASE_PROFILE,
+      commuteMode: 'petrol_car',
+      cookingFuel: 'biomass_chulha',
+    };
+    const cmp = compareWhatIf(cleanBase, dirtyAlt);
+    expect(cmp.delta.co2eAvoidedGramsPerDay).toBeLessThan(0);
+    expect(cmp.explanation.en).toContain('shifts daily emissions by 6480');
+    expect(cmp.explanation.hi).toContain('बदलाव होता है');
+  });
+
+  it('covers routineBuilder missing series fallback, indoor > outdoor cooking spike, practical indoor target, and HI sports', () => {
+    const lowStudentHi = computeFullPlan(
+      { ...BASE_PROFILE, persona: 'outdoor_student', language: 'hi' },
+      { pm25: 90 },
+    );
+    expect(lowStudentHi.routine.find((s) => s.id === 'afternoon_ventilation')?.description).toContain(
+      'हल्का बाहरी खेल संक्षिप्त रखें',
+    );
+
+    const cleanIndoorProfile: UserProfile = {
+      ...BASE_PROFILE,
+      cityId: 'bengaluru_silk_board',
+      cookingFuel: 'induction',
+      activeHacks: ['window_sealing', 'hepa_purifier', 'corsi_rosenthal_box'],
+    };
+    const cleanEnReport = computeDeterministicReport(cleanIndoorProfile, { pm25: 20 });
+    expect(cleanEnReport.exposure.optimizedIndoorPm25).toBeLessThanOrEqual(30);
+    const cleanEnRoutine = generateDailyRoutine(cleanIndoorProfile, cleanEnReport);
+    expect(cleanEnRoutine.find((s) => s.id === 'night_recovery')?.description).toContain(
+      'meets the <= 30 ug/m3 target',
+    );
+    const cleanHiRoutine = generateDailyRoutine(
+      { ...cleanIndoorProfile, language: 'hi' },
+      cleanEnReport,
+    );
+    expect(cleanHiRoutine.find((s) => s.id === 'night_recovery')?.description).toContain(
+      'व्यावहारिक लक्ष्य (<= 30 ug/m3) पर है',
+    );
+
+    const { hourlySeries: omittedSeries, ...baseExposure } = cleanEnReport.exposure;
+    expect(omittedSeries).toBeDefined();
+    const noSeriesReport = {
+      ...cleanEnReport,
+      city: { ...cleanEnReport.city, baselinePm25: 15 },
+      exposure: { ...baseExposure, optimizedIndoorPm25: 42 },
+    };
+    const spikeEn = generateDailyRoutine(BASE_PROFILE, noSeriesReport);
+    const spikeHi = generateDailyRoutine({ ...BASE_PROFILE, language: 'hi' }, noSeriesReport);
+    expect(spikeEn.find((s) => s.id === 'evening_cooking')?.description).toContain(
+      'kitchen exhaust',
+    );
+    expect(spikeHi.find((s) => s.id === 'evening_cooking')?.description).toContain(
+      'रसोई एग्जॉस्ट',
+    );
+
+    const unknownPersona: UserProfile = JSON.parse(
+      JSON.stringify({ ...BASE_PROFILE, persona: 'unknown_persona' }),
+    );
+    expect(generateDailyRoutine(unknownPersona, cleanEnReport)).toHaveLength(4);
+  });
+
+  it('guards Object.prototype keys in resolveCityPreset, cookingFuel, and aqiBand lookups', () => {
+    expect(resolveCityPreset('constructor').id).toBe('delhi_anand_vihar');
+    expect(resolveCityPreset('toString').id).toBe('delhi_anand_vihar');
+
+    const protoFuelProfile: UserProfile = JSON.parse(
+      JSON.stringify({ ...BASE_PROFILE, cookingFuel: 'toString' }),
+    );
+    const protoPlan = computeFullPlan(protoFuelProfile);
+    expect(Number.isFinite(protoPlan.report.exposure.optimizedIndoorPm25)).toBe(true);
+    expect(protoPlan.report.exposure.optimizedIndoorPm25).toBeGreaterThan(0);
+
+    const protoBandReport: DeterministicReport = JSON.parse(
+      JSON.stringify({ ...protoPlan.report, aqiBand: 'constructor' }),
+    );
+    expect(formatLocalizedSummary(protoBandReport, 'en')).toContain('ambient air is Good');
+  });
+
+  it('compares customLocation coordinates in isSameLocationTarget and handles omitted state', () => {
+    const customA: UserProfile = {
+      ...BASE_PROFILE,
+      customLocation: { name: 'Bhopal', lat: 23.26, lon: 77.41 },
+    };
+    const customB: UserProfile = {
+      ...BASE_PROFILE,
+      customLocation: { name: 'Udaipur', state: 'Rajasthan', lat: 24.58, lon: 73.71 },
+    };
+    expect(isSameLocationTarget(customA, customA)).toBe(true);
+    expect(isSameLocationTarget(customA, customB)).toBe(false);
+    expect(isSameLocationTarget(customA, BASE_PROFILE)).toBe(false);
+    expect(resolveBaseCity(customA).state.length).toBeGreaterThan(0);
   });
 });

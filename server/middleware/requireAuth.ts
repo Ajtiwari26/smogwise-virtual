@@ -3,16 +3,35 @@
  */
 
 import type { NextFunction, Request, Response } from 'express';
+import { isPlainRecord } from '../../src/domain/domainUtils.js';
+import { LANGUAGE_CODES, PERSONA_TYPES } from '../../src/domain/types.js';
 import type { PublicUser } from '../config/authAccounts.js';
 import { extractSessionToken, verifySessionToken } from '../services/authService.js';
 
-/** Express Request augmented with the verified authenticated user record. */
-export interface AuthenticatedRequest extends Request {
-  authUser?: PublicUser;
+const AUTH_USER_LOCAL_KEY = 'authUser';
+
+function isPublicUser(value: unknown): value is PublicUser {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value['id'] === 'string' &&
+    typeof value['email'] === 'string' &&
+    typeof value['name'] === 'string' &&
+    PERSONA_TYPES.some((persona) => persona === value['personaId']) &&
+    LANGUAGE_CODES.some((language) => language === value['defaultLang']) &&
+    typeof value['defaultCityId'] === 'string'
+  );
+}
+
+/** Reads the verified authenticated user stored on Express `res.locals`. */
+export function getAuthenticatedUser(res: Response): PublicUser | undefined {
+  const candidate: unknown = res.locals[AUTH_USER_LOCAL_KEY];
+  return isPublicUser(candidate) ? candidate : undefined;
 }
 
 /**
- * Requires a valid signed session token and populates `req.authUser`.
+ * Requires a valid signed session token and stores the verified user on `res.locals`.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   res.setHeader('Cache-Control', 'private, no-store');
@@ -26,6 +45,6 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required.' });
     return;
   }
-  (req as AuthenticatedRequest).authUser = user;
+  res.locals[AUTH_USER_LOCAL_KEY] = user;
   next();
 }

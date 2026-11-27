@@ -4,7 +4,7 @@
  */
 
 import type { KeyboardEvent, ReactElement } from 'react';
-import { useId } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import type { CustomLocation, LanguageCode, LocationSearchItem } from '../domain/types.js';
 import { type SearchState, useLocationCombobox } from './useLocationCombobox.js';
 
@@ -30,9 +30,15 @@ function SuggestionListbox({
   activeIndex,
   onSelect,
 }: SuggestionListboxProps): ReactElement {
+  const activeOptionRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    activeOptionRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeIndex]);
+
   const listCls =
     'absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border ' +
-    'border-slate-300 bg-white py-1 shadow-lg';
+    'border-slate-500 bg-white py-1 shadow-lg';
   const btnCls =
     'flex w-full items-center justify-between px-3 py-2 text-left text-sm ' +
     'text-slate-900 hover:bg-emerald-50';
@@ -46,11 +52,12 @@ function SuggestionListbox({
     >
       {results.map((item, idx) => {
         const selected = idx === activeIndex;
-        const optCls =
-          `${btnCls} ${selected ? 'bg-emerald-50' : 'bg-white'}`;
+        const focusCls = 'bg-emerald-50 ring-2 ring-inset ring-teal-700';
+        const optCls = `${btnCls} ${selected ? focusCls : 'bg-white'}`;
         return (
           <li key={item.id} role="none">
             <button
+              ref={selected ? activeOptionRef : null}
               type="button"
               id={`${listboxId}-${item.id}`}
               role="option"
@@ -60,7 +67,7 @@ function SuggestionListbox({
               className={optCls}
             >
               <span className="font-medium">{item.name}</span>
-              <span className="text-xs text-slate-600">{item.state}</span>
+              <span className="text-xs text-slate-700">{item.state}</span>
             </button>
           </li>
         );
@@ -92,23 +99,25 @@ function ComboboxInputField({
   onKeyDown,
   onSelect,
 }: ComboboxInputFieldProps): ReactElement {
-  const activeOption =
-    searchState.activeIndex >= 0 ? searchState.results[searchState.activeIndex] : undefined;
+  const inputRef = useRef<HTMLInputElement>(null);
+  const isOpen = searchState.isOpen && searchState.results.length > 0;
+  const activeOption = searchState.results[searchState.activeIndex];
   const activeDescendantId =
-    searchState.isOpen && activeOption !== undefined ? `${listboxId}-${activeOption.id}` : undefined;
+    isOpen && activeOption !== undefined ? `${listboxId}-${activeOption.id}` : undefined;
   const inputCls =
-    'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 ' +
+    'w-full rounded-lg border border-slate-500 bg-white px-3 py-2 text-sm text-slate-900 ' +
     'placeholder-slate-600 focus:border-emerald-700 focus:outline-none ' +
     'focus-visible:ring-2 focus-visible:ring-teal-700';
 
   return (
     <div className="relative">
       <input
+        ref={inputRef}
         id={inputId}
         type="text"
         role="combobox"
-        aria-expanded={searchState.isOpen}
-        aria-controls={listboxId}
+        aria-expanded={isOpen}
+        aria-controls={isOpen ? listboxId : undefined}
         aria-autocomplete="list"
         {...(activeDescendantId !== undefined
           ? { 'aria-activedescendant': activeDescendantId }
@@ -120,13 +129,16 @@ function ComboboxInputField({
         placeholder={isHindi ? 'जैसे: इंदौर, भोपाल, नोएडा...' : 'e.g., Indore, Bhopal, Noida...'}
         className={inputCls}
       />
-      {searchState.isOpen && searchState.results.length > 0 && (
+      {isOpen && (
         <SuggestionListbox
           listboxId={listboxId}
           isHindi={isHindi}
           results={searchState.results}
           activeIndex={searchState.activeIndex}
-          onSelect={onSelect}
+          onSelect={(item) => {
+            inputRef.current?.focus();
+            onSelect(item);
+          }}
         />
       )}
     </div>
@@ -147,12 +159,13 @@ function ComboboxHeaderRow({
   onUseMyLocation,
 }: ComboboxHeaderRowProps): ReactElement {
   const geoBtnCls =
-    'inline-flex items-center gap-1 rounded-md border border-slate-300 bg-slate-50 ' +
-    'px-2.5 py-1 text-xs font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-60';
+    'inline-flex items-center gap-1 rounded-md border border-slate-500 bg-slate-50 ' +
+    'px-2.5 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-100 ' +
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700 disabled:opacity-60';
 
   return (
     <div className="flex items-center justify-between gap-2">
-      <label htmlFor={inputId} className="block text-xs font-semibold text-slate-700">
+      <label htmlFor={inputId} className="block text-xs font-semibold text-slate-800">
         {isHindi ? 'कोई भी भारतीय शहर या इलाका खोजें' : 'Search Any Indian City or Locality'}
       </label>
       <button
@@ -182,7 +195,15 @@ export function LocationSearchCombobox({
   const ctrl = useLocationCombobox(isHindi, customLocation, onSelectLocation);
 
   return (
-    <div ref={ctrl.containerRef} className="relative space-y-2">
+    <div
+      ref={ctrl.containerRef}
+      className="relative space-y-2"
+      onBlur={({ currentTarget, relatedTarget }) => {
+        if (!(relatedTarget instanceof Node) || !currentTarget.contains(relatedTarget)) {
+          ctrl.closeSuggestions();
+        }
+      }}
+    >
       <ComboboxHeaderRow
         inputId={inputId}
         isHindi={isHindi}
@@ -195,7 +216,7 @@ export function LocationSearchCombobox({
         isHindi={isHindi}
         query={ctrl.query}
         searchState={ctrl.searchState}
-        onQueryChange={ctrl.setQuery}
+        onQueryChange={ctrl.changeQuery}
         onFocusInput={ctrl.handleFocusInput}
         onKeyDown={ctrl.handleInputKeyDown}
         onSelect={ctrl.commitSelection}

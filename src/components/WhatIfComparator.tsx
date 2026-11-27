@@ -1,3 +1,7 @@
+/**
+ * Interactive 2-choice What-If scenario comparator computing instant Tier 1 deltas.
+ */
+
 import React, { useMemo, useState } from 'react';
 import { compareWhatIf } from '../domain/impactService.js';
 import type {
@@ -7,6 +11,12 @@ import type {
   UserProfile,
   WhatIfDelta,
 } from '../domain/types.js';
+import {
+  type BilingualOption,
+  COMMUTE_OPTIONS,
+  FUEL_OPTIONS,
+  SelectField,
+} from './PersonaSelectFields.js';
 
 /** Props for the interactive WhatIfComparator component. */
 export interface WhatIfComparatorProps {
@@ -14,13 +24,25 @@ export interface WhatIfComparatorProps {
   readonly liveAq: LiveAqOverride | undefined;
 }
 
+const WHATIF_SELECT_CLS =
+  'mt-1 w-full rounded border border-slate-500 bg-white px-2 py-1.5 text-xs ' +
+  'text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700';
+
+const ALT_FUEL_OPTIONS: readonly BilingualOption<CookingFuel>[] = FUEL_OPTIONS.map((item) => ({
+  id: item.id,
+  en: item.id === 'lpg' ? 'LPG' : item.id === 'induction' ? 'Induction' : 'Biomass',
+  hi: item.id === 'lpg' ? 'एलपीजी' : item.id === 'induction' ? 'इंडक्शन' : 'बायोमास',
+}));
+
 const DeltaGrid: React.FC<{ readonly delta: WhatIfDelta; readonly isHi: boolean }> = React.memo(
   function DeltaGrid({ delta, isHi }) {
+    const dayUnit = isHi ? 'दिन' : 'day';
+    const moUnit = isHi ? 'माह' : 'mo';
     const items = [
-      { label: isHi ? 'खुराक कमी' : 'Dose Drop', val: `${delta.doseReductionUgPerDay} ug/day` },
-      { label: 'CO2e', val: `${delta.co2eAvoidedGramsPerDay} g/day` },
-      { label: 'PM2.5', val: `${delta.pm25AvoidedMgPerDay} mg/day` },
-      { label: isHi ? 'बचत' : 'Savings', val: `₹${delta.monthlyNetSavingsInr}/mo` },
+      { label: isHi ? 'खुराक कमी' : 'Dose Drop', val: `${delta.doseReductionUgPerDay} ug/${dayUnit}` },
+      { label: 'CO2e', val: `${delta.co2eAvoidedGramsPerDay} g/${dayUnit}` },
+      { label: 'PM2.5', val: `${delta.pm25AvoidedMgPerDay} mg/${dayUnit}` },
+      { label: isHi ? 'बचत' : 'Savings', val: `₹${delta.monthlyNetSavingsInr}/${moUnit}` },
     ];
     return (
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
@@ -35,18 +57,6 @@ const DeltaGrid: React.FC<{ readonly delta: WhatIfDelta; readonly isHi: boolean 
   },
 );
 
-const ALT_COMMUTE_OPTIONS: readonly {
-  readonly id: CommuteMode;
-  readonly en: string;
-  readonly hi: string;
-}[] = [
-  { id: 'metro_bus', en: 'Metro / Bus', hi: 'मेट्रो / बस' },
-  { id: 'two_wheeler', en: 'Two-Wheeler', hi: 'दोपहिया वाहन' },
-  { id: 'carpool', en: 'Carpool', hi: 'कारपूल' },
-  { id: 'wfh_walk', en: 'WFH / Walk', hi: 'घर से काम / पैदल' },
-  { id: 'petrol_car', en: 'Petrol Car', hi: 'पेट्रोल कार' },
-];
-
 function pickDefaultAltCommute(mode: CommuteMode): CommuteMode {
   return mode === 'metro_bus' ? 'wfh_walk' : 'metro_bus';
 }
@@ -54,16 +64,6 @@ function pickDefaultAltCommute(mode: CommuteMode): CommuteMode {
 function pickDefaultAltFuel(fuel: CookingFuel): CookingFuel {
   return fuel === 'induction' ? 'lpg' : 'induction';
 }
-
-const ALT_FUEL_OPTIONS: readonly {
-  readonly id: CookingFuel;
-  readonly en: string;
-  readonly hi: string;
-}[] = [
-  { id: 'induction', en: 'Induction', hi: 'इंडक्शन' },
-  { id: 'lpg', en: 'LPG', hi: 'एलपीजी' },
-  { id: 'biomass_chulha', en: 'Biomass', hi: 'बायोमास' },
-];
 
 const WhatIfControls: React.FC<{
   readonly altCommute: CommuteMode;
@@ -84,47 +84,31 @@ const WhatIfControls: React.FC<{
 }) {
   return (
     <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-      <div>
-        <label htmlFor="whatif-commute" className="block text-xs font-semibold text-slate-800">
-          {isHi ? 'वैकल्पिक यात्रा' : 'Alternative Commute'}
-        </label>
-        <select
-          id="whatif-commute"
-          value={altCommute}
-          onChange={(e) => onCommute(e.target.value as CommuteMode)}
-          className="mt-1 w-full rounded border border-slate-400 bg-white px-2 py-1.5 text-xs text-slate-900 focus-visible:ring-2 focus-visible:ring-teal-700"
-        >
-          {ALT_COMMUTE_OPTIONS.map((opt) => (
-            <option key={opt.id} value={opt.id}>
-              {isHi ? opt.hi : opt.en}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <label htmlFor="whatif-fuel" className="block text-xs font-semibold text-slate-800">
-          {isHi ? 'वैकल्पिक ईंधन' : 'Alternative Fuel'}
-        </label>
-        <select
-          id="whatif-fuel"
-          value={altFuel}
-          onChange={(e) => onFuel(e.target.value as CookingFuel)}
-          className="mt-1 w-full rounded border border-slate-400 bg-white px-2 py-1.5 text-xs text-slate-900 focus-visible:ring-2 focus-visible:ring-teal-700"
-        >
-          {ALT_FUEL_OPTIONS.map((opt) => (
-            <option key={opt.id} value={opt.id}>
-              {isHi ? opt.hi : opt.en}
-            </option>
-          ))}
-        </select>
-      </div>
+      <SelectField
+        id="whatif-commute"
+        label={isHi ? 'वैकल्पिक यात्रा' : 'Alternative Commute'}
+        value={altCommute}
+        options={COMMUTE_OPTIONS}
+        isHi={isHi}
+        className={WHATIF_SELECT_CLS}
+        onSelect={onCommute}
+      />
+      <SelectField
+        id="whatif-fuel"
+        label={isHi ? 'वैकल्पिक ईंधन' : 'Alternative Fuel'}
+        value={altFuel}
+        options={ALT_FUEL_OPTIONS}
+        isHi={isHi}
+        className={WHATIF_SELECT_CLS}
+        onSelect={onFuel}
+      />
       <div className="flex items-end gap-2 pb-1.5">
         <input
           id="whatif-corsi"
           type="checkbox"
           checked={addCorsiBox}
           onChange={(e) => onCorsi(e.target.checked)}
-          className="h-4 w-4 rounded border-slate-400 text-teal-700 focus-visible:ring-2 focus-visible:ring-teal-700"
+          className="h-4 w-4 rounded border-slate-500 text-teal-700 focus-visible:ring-2 focus-visible:ring-teal-700"
         />
         <label htmlFor="whatif-corsi" className="text-xs font-semibold text-slate-800">
           {isHi ? 'DIY कोर्सी-रोसेन्थल बॉक्स जोड़ें' : 'Add DIY Corsi-Rosenthal Box'}
@@ -145,47 +129,55 @@ function resolveAlternative<T>(
   return pickDefault(currentBase);
 }
 
+function useWhatIfState(profile: UserProfile, liveAq?: LiveAqOverride) {
+  const [commuteOverride, setCommuteOverride] = useState<{
+    readonly base: CommuteMode;
+    readonly alt: CommuteMode;
+  } | null>(null);
+  const [fuelOverride, setFuelOverride] = useState<{
+    readonly base: CookingFuel;
+    readonly alt: CookingFuel;
+  } | null>(null);
+  const [addCorsiBox, setAddCorsiBox] = useState<boolean>(true);
+
+  const altCommute = resolveAlternative(
+    commuteOverride,
+    profile.commuteMode,
+    pickDefaultAltCommute,
+  );
+  const altFuel = resolveAlternative(fuelOverride, profile.cookingFuel, pickDefaultAltFuel);
+
+  const comparison = useMemo(() => {
+    const nextHacks = addCorsiBox
+      ? Array.from(new Set([...profile.activeHacks, 'corsi_rosenthal_box' as const]))
+      : profile.activeHacks;
+    const alternative: UserProfile = {
+      ...profile,
+      commuteMode: altCommute,
+      cookingFuel: altFuel,
+      activeHacks: nextHacks,
+    };
+    return compareWhatIf(profile, alternative, liveAq);
+  }, [profile, liveAq, altCommute, altFuel, addCorsiBox]);
+
+  return {
+    altCommute,
+    altFuel,
+    addCorsiBox,
+    comparison,
+    setAddCorsiBox,
+    handleCommuteChange: (nextAlt: CommuteMode) =>
+      setCommuteOverride({ base: profile.commuteMode, alt: nextAlt }),
+    handleFuelChange: (nextAlt: CookingFuel) =>
+      setFuelOverride({ base: profile.cookingFuel, alt: nextAlt }),
+  };
+}
+
 /** Side-by-side 2-choice scenario comparator computing instant Tier 1 deltas. */
 export const WhatIfComparator: React.FC<WhatIfComparatorProps> = React.memo(
   function WhatIfComparator({ profile, liveAq }) {
     const isHi = profile.language === 'hi';
-    const [commuteOverride, setCommuteOverride] = useState<{
-      readonly base: CommuteMode;
-      readonly alt: CommuteMode;
-    } | null>(null);
-    const [fuelOverride, setFuelOverride] = useState<{
-      readonly base: CookingFuel;
-      readonly alt: CookingFuel;
-    } | null>(null);
-    const [addCorsiBox, setAddCorsiBox] = useState<boolean>(true);
-
-    const altCommute = resolveAlternative(
-      commuteOverride,
-      profile.commuteMode,
-      pickDefaultAltCommute,
-    );
-    const altFuel = resolveAlternative(fuelOverride, profile.cookingFuel, pickDefaultAltFuel);
-
-    const handleCommuteChange = (nextAlt: CommuteMode): void => {
-      setCommuteOverride({ base: profile.commuteMode, alt: nextAlt });
-    };
-
-    const handleFuelChange = (nextAlt: CookingFuel): void => {
-      setFuelOverride({ base: profile.cookingFuel, alt: nextAlt });
-    };
-
-    const comparison = useMemo(() => {
-      const nextHacks = addCorsiBox
-        ? Array.from(new Set([...profile.activeHacks, 'corsi_rosenthal_box' as const]))
-        : profile.activeHacks;
-      const alternative: UserProfile = {
-        ...profile,
-        commuteMode: altCommute,
-        cookingFuel: altFuel,
-        activeHacks: nextHacks,
-      };
-      return compareWhatIf(profile, alternative, liveAq);
-    }, [profile, liveAq, altCommute, altFuel, addCorsiBox]);
+    const state = useWhatIfState(profile, liveAq);
 
     return (
       <section
@@ -197,20 +189,18 @@ export const WhatIfComparator: React.FC<WhatIfComparatorProps> = React.memo(
           {isHi ? 'क्या होगा यदि? (2-विकल्प तुलना)' : 'What-If 2-Choice Comparator'}
         </h2>
         <WhatIfControls
-          altCommute={altCommute}
-          altFuel={altFuel}
-          addCorsiBox={addCorsiBox}
+          altCommute={state.altCommute}
+          altFuel={state.altFuel}
+          addCorsiBox={state.addCorsiBox}
           isHi={isHi}
-          onCommute={handleCommuteChange}
-          onFuel={handleFuelChange}
-          onCorsi={setAddCorsiBox}
+          onCommute={state.handleCommuteChange}
+          onFuel={state.handleFuelChange}
+          onCorsi={state.setAddCorsiBox}
         />
-        <div aria-live="polite">
-          <DeltaGrid delta={comparison.delta} isHi={isHi} />
-          <p className="mt-2.5 text-xs text-slate-800">
-            {isHi ? comparison.explanation.hi : comparison.explanation.en}
-          </p>
-        </div>
+        <DeltaGrid delta={state.comparison.delta} isHi={isHi} />
+        <p aria-live="polite" className="mt-2.5 text-xs text-slate-800">
+          {isHi ? state.comparison.explanation.hi : state.comparison.explanation.en}
+        </p>
       </section>
     );
   },
