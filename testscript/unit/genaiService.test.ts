@@ -293,8 +293,17 @@ describe('Grounded Q&A', () => {
     ['Can I do this with 1,200 INR?', 'en', 1200],
     ['50 INR, 12 options fit.', 'en', 50],
     ['₹50, 120 options are listed below', 'en', 50],
+    ['₹50, 120 household options fit', 'en', 50],
     ['₹50, 12 options', 'en', 50],
     ['₹५०, १२० विकल्प हैं।', 'hi', 50],
+    ['What can I do with a ₹600 per year budget?', 'en', 50],
+    ['Budget of ₹1,200/year', 'en', 100],
+    ['₹1,200 annually', 'en', 100],
+    ['600 INR per household per year', 'en', 50],
+    ['₹600 p.a.', 'en', 50],
+    ['६०० रुपये सालाना में क्या मिलेगा?', 'hi', 50],
+    ['₹1,200 quarterly', 'en', 400],
+    ['₹1,200 semi-annually', 'en', 200],
     ['What can I do for ₹50 000 per month?', 'en', 50_000],
     ['What can I do for ₹50\u202f000 per month?', 'en', 50_000],
     ['What can I do for 50\u202f000 INR per month?', 'en', 50_000],
@@ -313,6 +322,9 @@ describe('Grounded Q&A', () => {
     expect(result.answer).toContain(`₹${cap}/${language === 'hi' ? 'माह' : 'month'}`);
     expect(result.citationsUsed).toEqual([]);
     expect(result.answer).not.toMatch(/µg\/day|ug\/day/);
+    if (question === 'What can I do with a ₹600 per year budget?') {
+      expect(result.answer).not.toContain('₹450');
+    }
   });
 
   it.each([
@@ -320,6 +332,12 @@ describe('Grounded Q&A', () => {
     'What can I do with 50, 000 rupees?',
     'What can I do for ₹50, 500 monthly?',
     'What can I do for ₹50, 500 per year?',
+    '₹50, 500 every month',
+    '₹50, 500 per household per month',
+    '₹50, 500 per household',
+    '₹50, 500 each year',
+    '₹५०, ५०० हर महीने',
+    '₹५०, ५०० प्रति परिवार प्रति माह',
     'The monthly cap is ₹50, 500 per month.',
     '1234,500 INR',
     '100, 000 INR',

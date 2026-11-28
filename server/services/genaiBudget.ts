@@ -16,11 +16,17 @@ export const BUDGET_CURRENCY = String.raw`(?:₹|(?<!${WORD})${CURRENCY_UNIT}(?!
 
 const PERIOD = 'months?|mos?|years?|yrs?|annum|weeks?|wks?|days?|quarters?|qtrs?|hrs?|hours?|' +
   'fortnights?';
-const CADENCE = String.raw`${PERIOD}|(?:per[\p{Pd}\s]+|an?\s+)(?:${PERIOD})|` +
-  'monthly|(?:bi)?weekly|daily|yearly|(?:semi)?annual(?:ly)?|quarterly|fortnightly|hourly';
-const HINDI_PERIOD = 'माह|महीन(?:ा|े|ों)|वर्ष|साल|दिन|सप्ताह|हफ़्त[ाे]|हफ्त[ाे]|तिमाही';
-const HINDI_CADENCE = String.raw`${HINDI_PERIOD}|प्रति\s*(?:${HINDI_PERIOD})|` +
-  'मासिक|वार्षिक|सालाना|साप्ताहिक|दैनिक|त्रैमासिक';
+const SCOPE = 'households?|famil(?:y|ies)|flats?|homes?|rooms?|persons?|residents?|members?|' +
+  'adults?|child(?:ren)?|commuters?|heads?|units?';
+const EN_CADENCE_PART = String.raw`(?:per[\p{Pd}\s]+|every\s+|each\s+|an?\s+)(?:${PERIOD}|${SCOPE})|` +
+  String.raw`(?:${PERIOD})|monthly|(?:bi)?weekly|daily|yearly|(?:semi|half)[\p{Pd}\s]?annual(?:ly)?|` +
+  String.raw`annually|annual|quarterly|fortnightly|hourly|p\.a\.?`;
+const CADENCE = String.raw`(?:${EN_CADENCE_PART})(?:[\p{Pd}\s]+(?:${EN_CADENCE_PART}))*`;
+const HINDI_PERIOD = 'माह|महीन(?:ा|े|ों)|वर्ष|साल|दिन|सप्ताह|हफ़्त[ाे]|हफ्त[ाे]|तिमाही|छमाही';
+const HINDI_SCOPE = 'घर|परिवार|फ़्लैट|फ्लैट|व्यक्ति|सदस्य';
+const HI_CADENCE_PART = String.raw`(?:प्रति|हर|प्रत्येक)\s*(?:${HINDI_PERIOD}|${HINDI_SCOPE})|` +
+  String.raw`(?:${HINDI_PERIOD})|मासिक|वार्षिक|अर्धवार्षिक|सालाना|साप्ताहिक|दैनिक|त्रैमासिक`;
+const HINDI_CADENCE = String.raw`(?:${HI_CADENCE_PART})(?:\s+(?:${HI_CADENCE_PART}))*`;
 const SCALE_UNIT = 'k|cr|bn|thousands?|lakhs?|lacs?|crores?|millions?|billions?|trillions?|' +
   'ह(?:ज\u093C?|\u095B)ार|लाख|करो(?:ड\u093C?|\u095C)|अरब|अर्ब|खरब|paise|पैस[ाे]';
 const QUALIFIER = String.raw`only|max(?:imum)?|min(?:imum)?|total|budget|cap|limit|approx(?:imately)?|plus|` +
@@ -53,14 +59,37 @@ const BUDGET = new RegExp(
 );
 const BUDGET_QUESTION = new RegExp(String.raw`${BUDGET_CURRENCY}|budget|\bcosts?\b|बजट|सस्त|रुप`, 'iu');
 
+const EN_SCOPE_PART = String.raw`(?:per[\p{Pd}\s]+|every\s+|each\s+|an?\s+)(?:${SCOPE})`;
+const HI_SCOPE_PART = String.raw`(?:प्रति|हर|प्रत्येक)\s*(?:${HINDI_SCOPE})`;
+const ANNUAL_TAIL = String.raw`(?:(?:per[\p{Pd}\s]+|every\s+|each\s+|an?\s+)(?:years?|yrs?|annum)|years?|yrs?|yearly|annual(?:ly)?|p\.a\.?|वार्षिक|सालाना|(?:प्रति|हर|प्रत्येक)?\s*(?:वर्ष|साल))`;
+const SEMI_ANNUAL_TAIL = String.raw`(?:(?:semi|half)[\p{Pd}\s]?annual(?:ly)?|अर्धवार्षिक|छमाही)`;
+const QUARTERLY_TAIL = String.raw`(?:quarterly|(?:per[\p{Pd}\s]+|every\s+|each\s+|an?\s+)?quarters?|तिमाही|त्रैमासिक)`;
+const TRAILING_PERIOD = new RegExp(
+  String.raw`^(?:\s*(?:${EN_SCOPE_PART}|${HI_SCOPE_PART}))*[\p{Pd}\s/]+` +
+  String.raw`(?:(${SEMI_ANNUAL_TAIL})|(${QUARTERLY_TAIL})|(${ANNUAL_TAIL}))${TOKEN_END}`,
+  'iu',
+);
+
+function periodDivisor(tail: string): number {
+  const match = TRAILING_PERIOD.exec(tail);
+  if (match === null) return 1;
+  if (match[1] !== undefined) return 6;
+  if (match[2] !== undefined) return 3;
+  return 12;
+}
+
 /** Returns the tightest explicitly stated currency cap, including zero and Hindi numerals. */
 export function readBudgetCap(question: string): number | undefined {
   const normalized = question.normalize('NFKC').replace(/[०-९]/g, (digit) =>
     String(digit.charCodeAt(0) - 0x966),
   );
-  const caps = [...normalized.matchAll(BUDGET)].map((match) =>
-    Number(`${match[1] ?? ''}${match[2] ?? match[3]}`.replace(/[,\s]/g, '').replace('−', '-')),
-  ).filter(Number.isFinite);
+  const caps = [...normalized.matchAll(BUDGET)].map((match) => {
+    const raw = Number(`${match[1] ?? ''}${match[2] ?? match[3]}`.replace(/[,\s]/g, '').replace('−', '-'));
+    if (!Number.isFinite(raw)) return Number.NaN;
+    const endIdx = (match.index ?? 0) + match[0].length;
+    const divisor = periodDivisor(normalized.slice(endIdx));
+    return divisor > 1 ? Math.floor((raw * 100) / divisor + 1e-9) / 100 : raw;
+  }).filter(Number.isFinite);
   return caps.length > 0 ? Math.max(0, Math.min(...caps)) : undefined;
 }
 
