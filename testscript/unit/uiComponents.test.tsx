@@ -1002,4 +1002,32 @@ describe('ScenarioPresetBar', () => {
       expect(onSyncReport).toHaveBeenCalledWith(sameReport, 'tok-renewed', 'tok-old');
     });
   });
+
+  it('drops late assistant replies from an earlier selectionRevision even if signal was ignored', async () => {
+    const profile = makeProfile();
+    const staleReport = computeFullPlan(profile, { pm25: 90, observedAt: '2026-11-28T09:00' }).report;
+    let resolveAsk: ((value: apiClient.AiAskApiResponse) => void) | undefined;
+    vi.spyOn(apiClient, 'postAiAsk').mockImplementation(
+      () => new Promise((resolve) => { resolveAsk = resolve; }),
+    );
+    const onSyncReport = vi.fn();
+    const { rerender } = render(
+      <GroundedAssistant profile={profile} selectionRevision={0} onSyncReport={onSyncReport} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'When is the safest time to ventilate today?' }));
+    rerender(
+      <GroundedAssistant profile={profile} selectionRevision={1} onSyncReport={onSyncReport} />,
+    );
+    await act(async () => resolveAsk?.({
+      answer: 'Stale rev-0 reply',
+      language: 'en',
+      mode: 'offline_grounded',
+      citationsUsed: [],
+      guardTriggered: false,
+      snapshotToken: 'tok-stale-rev',
+      report: staleReport,
+    }));
+    expect(onSyncReport).not.toHaveBeenCalled();
+    expect(screen.queryByText('Stale rev-0 reply')).not.toBeInTheDocument();
+  });
 });

@@ -131,12 +131,14 @@ async function probeSinglePersona(
   }
 }
 
-const CURRENCY_FIFTY_RE =
-  /(?:^|[^\d\u0966-\u096F])₹\s*(?:50|५०)(?![\d\u0966-\u096F,]|\.[0-9\u0966-\u096F])/u;
-const UNIT_FIFTY_RE =
-  /(?:^|[^\d\u0966-\u096F])(?:50|५०)\s*(?:INR|rupees?|रुपये)(?![\d\u0966-\u096F,]|\.[0-9])/iu;
+const D = '0-9\\u0966-\\u096F';
+const SUF = `(?![${D}]|[.,][${D}])`;
+const CURRENCY_FIFTY_RE = new RegExp(`(?:^|[^${D}])₹\\s*(?:50|५०)${SUF}`, 'u');
+const UNIT_FIFTY_RE = new RegExp(
+  `(?:^|[^${D}.,])(?:50|५०)\\s*(?:INR|rupees?|रुपये)${SUF}`, 'iu');
 
-function isGroundedBudgetReplyValid(answer: string, mode: unknown): boolean {
+/** Validates whether an assistant budget reply mentions exact ₹50/५० cap cleanly. */
+export function isGroundedBudgetReplyValid(answer: string, mode: unknown): boolean {
   const hasCap = CURRENCY_FIFTY_RE.test(answer) || UNIT_FIFTY_RE.test(answer);
   if (mode === 'offline_grounded') {
     return hasCap && !/µg\/day|ug\/day/i.test(answer);

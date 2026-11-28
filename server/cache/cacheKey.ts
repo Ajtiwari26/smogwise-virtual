@@ -122,4 +122,3 @@ export function hashCacheKey(input: unknown): string {
     ? crypto.hash('sha256', canonical)
     : crypto.createHash('sha256').update(canonical).digest('hex');
 }
-

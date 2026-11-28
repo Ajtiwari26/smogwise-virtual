@@ -19,10 +19,13 @@ import type {
 } from '../../src/domain/types.js';
 
 const PLANTS_QUESTION_RE = /\bplants?\b|houseplant|indoor\s*plant|areca|spider\s*plant|पौध|गमल/iu;
-const COMMUTE_WHAT_IF_RE =
-  /commute|carpool|metro|bus|petrol|wfh|walk|two[- ]?wheeler|आवागमन|यातायात|पैदल|मेट्रो/iu;
+const COMMUTE_WHAT_IF_RE = new RegExp(
+  'commute|carpool|metro|bus|petrol|wfh|walk|two[- ]?wheeler|' +
+  'आवागमन|यातायात|पैदल|मेट्रो|बस|कारपूल',
+  'iu',
+);
 const FUEL_WHAT_IF_RE =
-  /cooking|fuel|chulha|induction|lpg|biomass|ईंधन|चूल्हा|रसोई|इंडक्शन/iu;
+  /cooking|fuel|stove|chulha|induction|electric|lpg|biomass|ईंधन|चूल्हा|रसोई|इंडक्शन/iu;
 const GENERIC_WHAT_IF_RE = /what[- ]?if|तुलना/iu;
 
 /** Returns true for site-independent houseplant-vs-HEPA questions. */

@@ -9,20 +9,17 @@ import type {
   FullPlanOutput,
   UserProfile,
 } from '../domain/types.js';
+import { postPlan, postPlanBriefing } from '../services/apiClient.js';
 import {
-  type PlanBriefingApiResponse,
-  postPlan,
-  postPlanBriefing,
-} from '../services/apiClient.js';
-import {
-  type AqErrorCode,
   BRIEFING_DEBOUNCE_MS,
   buildLocationKey,
+  buildRemotePlanOutput,
   buildTrackedLocRef,
   DEBOUNCE_MS,
   readActiveLoc,
-  readAqMetaFromReport,
   resolveAqErrorCode,
+  type SettledBriefingState,
+  type SettledPlanState,
   shouldAcceptExternalSnapshot,
   type TrackedSnapshotMeta,
 } from './useSmogPlanMetadata.js';
@@ -39,21 +36,6 @@ export {
   formatAqErrorCode,
   stripCustomLocation,
 } from './useSmogPlanMetadata.js';
-
-interface SettledPlanState {
-  readonly profile: UserProfile;
-  readonly revision: number;
-  readonly locationKey: string;
-  readonly data?: FullPlanOutput;
-  readonly errorCode?: AqErrorCode;
-}
-
-interface SettledBriefingState {
-  readonly profile: UserProfile;
-  readonly revision: number;
-  readonly data?: PlanBriefingApiResponse;
-  readonly error?: unknown;
-}
 
 type SettledLocRef = TrackedSnapshotMeta & {
   readonly key: string;
@@ -101,48 +83,92 @@ function handleSyncFailure(
   setBriefingState({ profile, revision, error });
 }
 
+interface SyncTarget {
+  readonly locationKey: string;
+  readonly revision: number;
+}
+
+function isTargetCurrent(target: SyncTarget, locationKey: string, revision: number): boolean {
+  return target.locationKey === locationKey && target.revision === revision;
+}
+
+function scheduleBriefingSync(
+  profile: UserProfile,
+  revision: number,
+  startedAt: number,
+  token: string | undefined,
+  controller: AbortController,
+  latestTargetRef: React.RefObject<SyncTarget>,
+  setBriefingState: React.Dispatch<React.SetStateAction<SettledBriefingState | undefined>>,
+): ReturnType<typeof setTimeout> {
+  const gap = BRIEFING_DEBOUNCE_MS - DEBOUNCE_MS - (Date.now() - startedAt);
+  const locationKey = buildLocationKey(profile);
+  return setTimeout(() => {
+    void postPlanBriefing(profile, controller.signal, token).then(
+      (b) => {
+        const cur = isTargetCurrent(latestTargetRef.current, locationKey, revision);
+        if (!controller.signal.aborted && cur) setBriefingState({ profile, revision, data: b });
+      },
+      (err: unknown) => {
+        const cur = isTargetCurrent(latestTargetRef.current, locationKey, revision);
+        if (!controller.signal.aborted && cur) setBriefingState({ profile, revision, error: err });
+      },
+    );
+  }, Math.max(0, gap));
+}
+
+function applySettledPlan(
+  profile: UserProfile,
+  revision: number,
+  locationKey: string,
+  data: FullPlanOutput,
+  tokenForPlan: string | undefined,
+  locRef: React.MutableRefObject<SettledLocRef | undefined>,
+  setSettledPlan: React.Dispatch<React.SetStateAction<SettledPlanState | undefined>>,
+): string | undefined {
+  const activeLoc = readActiveLoc(locRef.current, locationKey, revision);
+  const ok = shouldAcceptExternalSnapshot(
+    activeLoc, data.report, data.snapshotToken, tokenForPlan, true,
+  );
+  if (!ok) return activeLoc?.token;
+  const nextToken = data.snapshotToken ?? tokenForPlan;
+  locRef.current = buildTrackedLocRef(locationKey, revision, data.report, nextToken);
+  const resolved = nextToken === undefined || data.snapshotToken !== undefined
+    ? data : { ...data, snapshotToken: nextToken };
+  setSettledPlan({ profile, revision, locationKey, data: resolved });
+  return nextToken;
+}
+
 function scheduleCoordinatedSync(
   profile: UserProfile,
   revision: number,
   locationKey: string,
+  latestTargetRef: React.RefObject<SyncTarget>,
   locRef: React.MutableRefObject<SettledLocRef | undefined>,
   setSettledPlan: React.Dispatch<React.SetStateAction<SettledPlanState | undefined>>,
   setBriefingState: React.Dispatch<React.SetStateAction<SettledBriefingState | undefined>>,
 ): () => void {
   const controller = new AbortController();
-  const cached = locRef.current?.key === locationKey && locRef.current.revision === revision
-    ? locRef.current : undefined;
+  const cached = readActiveLoc(locRef.current, locationKey, revision);
   if (cached?.errorCode === 'LIVE_AQ_UNAVAILABLE') return () => controller.abort();
-  const tokenForPlan = cached?.token;
   let briefingTimer: ReturnType<typeof setTimeout> | undefined;
   const planTimer = setTimeout(() => {
+    const tokenForPlan = readActiveLoc(locRef.current, locationKey, revision)?.token;
     const startedAt = Date.now();
     void postPlan(profile, controller.signal, tokenForPlan).then(
       (data) => {
         if (controller.signal.aborted) return;
-        const nextToken = data.snapshotToken ?? tokenForPlan;
-        locRef.current = {
-          key: locationKey, revision,
-          ...(data.report.observationId !== undefined
-            ? { observationId: data.report.observationId } : {}),
-          ...(data.report.observedAt !== undefined ? { observedAt: data.report.observedAt } : {}),
-          ...(nextToken !== undefined ? { token: nextToken } : {}),
-        };
-        setSettledPlan({ profile, revision, locationKey, data });
-        const gap = BRIEFING_DEBOUNCE_MS - DEBOUNCE_MS - (Date.now() - startedAt);
-        briefingTimer = setTimeout(() => {
-          void postPlanBriefing(profile, controller.signal, nextToken).then(
-            (b) => {
-              if (!controller.signal.aborted) setBriefingState({ profile, revision, data: b });
-            },
-            (err: unknown) => {
-              if (!controller.signal.aborted) setBriefingState({ profile, revision, error: err });
-            },
-          );
-        }, Math.max(0, gap));
+        if (!isTargetCurrent(latestTargetRef.current, locationKey, revision)) return;
+        const nextToken = applySettledPlan(
+          profile, revision, locationKey, data, tokenForPlan, locRef, setSettledPlan,
+        );
+        briefingTimer = scheduleBriefingSync(
+          profile, revision, startedAt, nextToken, controller, latestTargetRef, setBriefingState,
+        );
       },
       (error: unknown) => {
-        if (!controller.signal.aborted) {
+        const cur = isTargetCurrent(latestTargetRef.current, locationKey, revision);
+        if (!controller.signal.aborted && cur) {
           handleSyncFailure(
             error, profile, revision, locationKey, locRef, setSettledPlan, setBriefingState,
           );
@@ -157,57 +183,6 @@ function scheduleCoordinatedSync(
   };
 }
 
-function readSettledLiveAq(plan: FullPlanOutput | undefined) {
-  if (plan === undefined || plan.report.aqStatus === 'unavailable') return undefined;
-  return extractReportLiveAq(plan.report);
-}
-
-function readPlanFields(
-  activeLocPlan: SettledPlanState | undefined,
-  profile: UserProfile,
-) {
-  const data = activeLocPlan?.data;
-  return {
-    liveAq: readSettledLiveAq(data),
-    aqMeta: readAqMetaFromReport(data?.report),
-    snapshotToken: data?.snapshotToken,
-    aqiErrorCode: activeLocPlan?.errorCode,
-    isAqSyncing: activeLocPlan === undefined,
-    syncedPlan: activeLocPlan?.profile === profile ? data : undefined,
-  };
-}
-
-function readBriefingFields(activeBriefing: SettledBriefingState | undefined) {
-  return {
-    briefing: activeBriefing?.data,
-    isBriefingLoading: activeBriefing === undefined,
-    briefingError: activeBriefing?.error !== undefined,
-  };
-}
-
-function buildRemotePlanOutput(
-  profile: UserProfile,
-  revision: number,
-  locationKey: string,
-  settledPlan: SettledPlanState | undefined,
-  briefingState: SettledBriefingState | undefined,
-) {
-  const activeLocPlan =
-    settledPlan !== undefined &&
-    settledPlan.locationKey === locationKey &&
-    settledPlan.revision === revision
-      ? settledPlan : undefined;
-  const activeBriefing =
-    briefingState !== undefined &&
-    briefingState.profile === profile &&
-    briefingState.revision === revision
-      ? briefingState : undefined;
-  return {
-    ...readPlanFields(activeLocPlan, profile),
-    ...readBriefingFields(activeBriefing),
-  };
-}
-
 function setTokenIfPresent(
   prev: SettledPlanState | undefined,
   token: string,
@@ -218,10 +193,12 @@ function setTokenIfPresent(
 
 function applyExternalSnapshot(
   profile: UserProfile, revision: number, locationKey: string,
+  latestTargetRef: React.RefObject<SyncTarget>,
   locRef: React.MutableRefObject<SettledLocRef | undefined>,
   setSettledPlan: React.Dispatch<React.SetStateAction<SettledPlanState | undefined>>,
   report: DeterministicReport, token?: string, requestedToken?: string,
 ): void {
+  if (!isTargetCurrent(latestTargetRef.current, locationKey, revision)) return;
   const activeLoc = readActiveLoc(locRef.current, locationKey, revision);
   if (!shouldAcceptExternalSnapshot(activeLoc, report, token, requestedToken)) return;
   locRef.current = buildTrackedLocRef(locationKey, revision, report, token);
@@ -242,10 +219,12 @@ export function useRemotePlan(profile: UserProfile, revision: number) {
   const [settledPlan, setSettledPlan] = useState<SettledPlanState>();
   const [briefingState, setBriefingState] = useState<SettledBriefingState>();
   const locRef = useRef<SettledLocRef | undefined>(undefined);
+  const latestTargetRef = useRef<SyncTarget>({ locationKey, revision });
+  latestTargetRef.current = { locationKey, revision };
 
   useEffect(
     () => scheduleCoordinatedSync(
-      profile, revision, locationKey, locRef, setSettledPlan, setBriefingState,
+      profile, revision, locationKey, latestTargetRef, locRef, setSettledPlan, setBriefingState,
     ),
     [locationKey, profile, revision],
   );
@@ -253,7 +232,8 @@ export function useRemotePlan(profile: UserProfile, revision: number) {
   const syncExternalReport = useCallback(
     (report: DeterministicReport, token?: string, requestedToken?: string) =>
       applyExternalSnapshot(
-        profile, revision, locationKey, locRef, setSettledPlan, report, token, requestedToken,
+        profile, revision, locationKey, latestTargetRef, locRef,
+        setSettledPlan, report, token, requestedToken,
       ),
     [locationKey, profile, revision],
   );

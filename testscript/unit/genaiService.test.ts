@@ -383,5 +383,12 @@ describe('Grounded Q&A', () => {
       profile: makeProfile({ commuteMode: 'metro_bus', commuteDistanceKm: 20, cookingFuel: 'induction' }),
     });
     expect(keepSameOption.answer).toContain('0 g CO2e/day');
+
+    const keepElectricStove = await askGroundedAssistant({
+      question: 'What if I keep my electric stove?',
+      profile: makeProfile({ commuteMode: 'metro_bus', commuteDistanceKm: 20, cookingFuel: 'induction' }),
+    });
+    expect(keepElectricStove.answer).toContain('0 g CO2e/day');
+    expect(keepElectricStove.answer).not.toContain('640');
   });
 });

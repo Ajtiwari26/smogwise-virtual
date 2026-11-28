@@ -543,3 +543,79 @@ it('rejects stale out-of-order external rollbacks and accepts token-only renewal
     cleanupTestState();
   }
 });
+
+it('blocks late /api/plan responses from rolling back a fresher assistant snapshot', async () => {
+  setupDefaultMocks();
+  vi.useFakeTimers();
+  try {
+    const { computeFullPlan } = await import('../../src/domain/impactService.js');
+    const oldPlan = {
+      ...computeFullPlan(DEFAULT_PROFILE, { pm25: 42, observedAt: '2026-11-28T06:00:00Z' }),
+      snapshotToken: 'tok-old',
+    };
+    const freshReport = computeFullPlan(DEFAULT_PROFILE, {
+      pm25: 90, observedAt: '2026-11-28T09:00:00Z',
+    }).report;
+    let resolvePlan: ((value: typeof oldPlan) => void) | undefined;
+    mockedPostPlan.mockImplementation(
+      () => new Promise((resolve) => { resolvePlan = resolve; }),
+    );
+    mockedPostPlanBriefing.mockResolvedValue({
+      ...mockBriefingResponse,
+      observationId: resolveReportAq(DEFAULT_PROFILE, {
+        pm25: 90, observedAt: '2026-11-28T09:00:00Z',
+      }).observationId,
+    });
+
+    const { result } = renderHook(() => useSmogPlan());
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); });
+    act(() => { result.current.syncExternalReport(freshReport, 'tok-fresh', undefined); });
+    expect(result.current.liveAq?.pm25).toBe(90);
+    expect(result.current.snapshotToken).toBe('tok-fresh');
+
+    await act(async () => {
+      resolvePlan?.(oldPlan);
+      await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS);
+    });
+    expect(result.current.liveAq?.pm25).toBe(90);
+    expect(result.current.snapshotToken).toBe('tok-fresh');
+    expect(mockedPostPlanBriefing).toHaveBeenCalledWith(
+      expect.objectContaining({ cityId: DEFAULT_PROFILE.cityId }),
+      expect.any(AbortSignal),
+      'tok-fresh',
+    );
+  } finally {
+    cleanupTestState();
+  }
+});
+
+it('ignores stale syncExternalReport closures from an earlier selection revision', async () => {
+  setupDefaultMocks();
+  vi.useFakeTimers();
+  try {
+    const { computeFullPlan } = await import('../../src/domain/impactService.js');
+    const rev1Aq: LiveAqOverride = { pm25: 250, observedAt: '2026-11-28T10:00:00Z' };
+    const staleRev0Report = computeFullPlan(DEFAULT_PROFILE, {
+      pm25: 42, observedAt: '2026-11-28T06:00:00Z',
+    }).report;
+    mockedPostPlan
+      .mockResolvedValueOnce({ ...computeFullPlan(DEFAULT_PROFILE, mockLiveAq), snapshotToken: 'tok-0' })
+      .mockResolvedValueOnce({ ...computeFullPlan(DEFAULT_PROFILE, rev1Aq), snapshotToken: 'tok-1' });
+
+    const { result } = renderHook(() => useSmogPlan());
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); });
+    const staleSync = result.current.syncExternalReport;
+
+    act(() => { result.current.selectPresetCity(DEFAULT_PROFILE.cityId); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); });
+    expect(result.current.liveAq?.pm25).toBe(250);
+    expect(result.current.snapshotToken).toBe('tok-1');
+
+    act(() => { staleSync(staleRev0Report, 'tok-old', 'tok-0'); });
+    expect(result.current.liveAq?.pm25).toBe(250);
+    expect(result.current.snapshotToken).toBe('tok-1');
+    expect(result.current.isSyncing).toBe(false);
+  } finally {
+    cleanupTestState();
+  }
+});

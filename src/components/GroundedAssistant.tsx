@@ -28,9 +28,16 @@ type SyncReportFn = (
   requestedToken?: string,
 ) => void;
 
+interface SyncMeta {
+  readonly obs: string | undefined;
+  readonly token: string | undefined;
+  readonly rev: number;
+}
+
 /** Props for the GroundedAssistant component. */
 export interface GroundedAssistantProps {
   readonly profile: UserProfile;
+  readonly selectionRevision?: number | undefined;
   readonly observationId?: string | undefined;
   readonly snapshotToken?: string | undefined;
   readonly onSyncReport?: SyncReportFn | undefined;
@@ -39,8 +46,7 @@ export interface GroundedAssistantProps {
 function dispatchAssistantAsk(
   trimmed: string,
   profile: UserProfile,
-  latestObsRef: React.RefObject<string | undefined>,
-  latestTokenRef: React.RefObject<string | undefined>,
+  syncMetaRef: React.RefObject<SyncMeta>,
   snapshotToken: string | undefined,
   onSyncReport: SyncReportFn | undefined,
   abortRef: React.MutableRefObject<AbortController | null>,
@@ -51,15 +57,16 @@ function dispatchAssistantAsk(
   abortRef.current?.abort();
   const controller = new AbortController();
   abortRef.current = controller;
+  const sentRev = syncMetaRef.current.rev;
   setIsLoading(true);
   setErrorCode(null);
 
   void postAiAsk(trimmed, profile, controller.signal, snapshotToken)
     .then((res) => {
-      if (controller.signal.aborted) return;
-      const obsChanged = res.report.observationId !== latestObsRef.current;
+      if (controller.signal.aborted || syncMetaRef.current.rev !== sentRev) return;
+      const obsChanged = res.report.observationId !== syncMetaRef.current.obs;
       const tokenRenewed =
-        res.snapshotToken !== undefined && res.snapshotToken !== latestTokenRef.current;
+        res.snapshotToken !== undefined && res.snapshotToken !== syncMetaRef.current.token;
       if (res.mode !== 'guard_refusal' && (obsChanged || tokenRenewed)) {
         onSyncReport?.(res.report, res.snapshotToken, snapshotToken);
       }
@@ -67,7 +74,7 @@ function dispatchAssistantAsk(
       setIsLoading(false);
     })
     .catch((err: unknown) => {
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && syncMetaRef.current.rev === sentRev) {
         const unavailable = err instanceof ApiError && err.code === 'LIVE_AQ_UNAVAILABLE';
         setErrorCode(unavailable ? 'AQ_UNAVAILABLE' : 'ASK_FAILED');
         setIsLoading(false);
@@ -97,8 +104,23 @@ function buildAssistantProfileKey(profile: UserProfile): string {
   ]);
 }
 
+function useSyncMetaRef(
+  observationId: string | undefined,
+  snapshotToken: string | undefined,
+  selectionRevision: number,
+): React.RefObject<SyncMeta> {
+  const ref = useRef<SyncMeta>({
+    obs: observationId, token: snapshotToken, rev: selectionRevision,
+  });
+  useLayoutEffect(() => {
+    ref.current = { obs: observationId, token: snapshotToken, rev: selectionRevision };
+  }, [observationId, selectionRevision, snapshotToken]);
+  return ref;
+}
+
 function useAssistantController(
   profile: UserProfile,
+  selectionRevision: number,
   observationId?: string,
   snapshotToken?: string,
   onSyncReport?: SyncReportFn,
@@ -109,14 +131,11 @@ function useAssistantController(
   const [errorCode, setErrorCode] = useState<AssistantErrorCode | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const questionRef = useRef<string>(question);
-  const latestObsRef = useRef<string | undefined>(observationId);
-  const latestTokenRef = useRef<string | undefined>(snapshotToken);
+  const syncMetaRef = useSyncMetaRef(observationId, snapshotToken, selectionRevision);
 
   useEffect(() => {
     questionRef.current = question;
-    latestObsRef.current = observationId;
-    latestTokenRef.current = snapshotToken;
-  }, [observationId, question, snapshotToken]);
+  }, [question]);
 
   const abortPendingAsk = useCallback(() => abortRef.current?.abort(), []);
   const profileKey = useMemo(() => buildAssistantProfileKey(profile), [profile]);
@@ -126,7 +145,7 @@ function useAssistantController(
     setIsLoading(false);
     setErrorCode(null);
     return abortPendingAsk;
-  }, [abortPendingAsk, profileKey]);
+  }, [abortPendingAsk, profileKey, selectionRevision]);
 
   const submitQuestion = useCallback((text: string): void => {
     const trimmed = text.trim();
@@ -135,10 +154,10 @@ function useAssistantController(
       return;
     }
     dispatchAssistantAsk(
-      trimmed, profile, latestObsRef, latestTokenRef, snapshotToken, onSyncReport,
+      trimmed, profile, syncMetaRef, snapshotToken, onSyncReport,
       abortRef, setResponse, setIsLoading, setErrorCode,
     );
-  }, [onSyncReport, profile, snapshotToken]);
+  }, [onSyncReport, profile, snapshotToken, syncMetaRef]);
   const handleQuickSelect = useCallback((label: string) => {
     setQuestion(label);
     submitQuestion(label);
@@ -156,7 +175,9 @@ function useAssistantController(
 
 /** Grounded Tier 2 GenAI Q&A panel calling /api/ai/ask with citation pills. */
 export const GroundedAssistant: React.FC<GroundedAssistantProps> = React.memo(
-  function GroundedAssistant({ profile, observationId, snapshotToken, onSyncReport }) {
+  function GroundedAssistant({
+    profile, selectionRevision = 0, observationId, snapshotToken, onSyncReport,
+  }) {
     const isHi = profile.language === 'hi';
     const {
       question,
@@ -166,7 +187,9 @@ export const GroundedAssistant: React.FC<GroundedAssistantProps> = React.memo(
       handleQuickSelect,
       handleQuestionChange,
       handleFormSubmit,
-    } = useAssistantController(profile, observationId, snapshotToken, onSyncReport);
+    } = useAssistantController(
+      profile, selectionRevision, observationId, snapshotToken, onSyncReport,
+    );
     const errorMsg = formatAssistantError(errorCode, isHi);
 
     return (

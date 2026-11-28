@@ -2,15 +2,17 @@
  * Pure air-quality metadata formatters, constants, and location helpers for useSmogPlan.
  */
 
+import { extractReportLiveAq } from '../domain/impactService.js';
 import type {
   CustomLocation,
   DeterministicReport,
   DominantPollutant,
+  FullPlanOutput,
   LanguageCode,
   LocationSearchItem,
   UserProfile,
 } from '../domain/types.js';
-import { ApiError } from '../services/apiClient.js';
+import { ApiError, type PlanBriefingApiResponse } from '../services/apiClient.js';
 
 /** Debounce interval (ms) for /api/plan synchronization. */
 export const DEBOUNCE_MS = 280;
@@ -160,31 +162,105 @@ function isOlderTimestamp(curTs: number | undefined, nextTs: number | undefined)
   return curTs !== undefined && nextTs !== undefined && nextTs < curTs;
 }
 
+function isFresherTimestamp(curTs: number | undefined, nextTs: number | undefined): boolean {
+  return nextTs !== undefined && (curTs === undefined || nextTs > curTs);
+}
+
 function isTokenRaceStale(
   current: TrackedSnapshotMeta | undefined,
   requestedToken: string | undefined,
   curTs: number | undefined,
   nextTs: number | undefined,
 ): boolean {
-  if (current === undefined || requestedToken === undefined) return false;
-  if (current.token === undefined || requestedToken === current.token) return false;
-  return curTs === undefined || nextTs === undefined || nextTs <= curTs;
+  if (current === undefined || current.token === undefined) return false;
+  if (requestedToken === current.token) return false;
+  return !isFresherTimestamp(curTs, nextTs);
 }
 
-/** Prevents older out-of-order responses from rolling back fresher workspace snapshots. */
+function isRedundantSameObs(
+  current: TrackedSnapshotMeta | undefined,
+  nextReport: DeterministicReport,
+  nextToken: string | undefined,
+  allowSameTokenRefresh: boolean,
+): boolean {
+  if (allowSameTokenRefresh || current?.observationId === undefined) return false;
+  if (current.observationId !== nextReport.observationId) return false;
+  return nextToken === undefined || nextToken === current.token;
+}
+
+/** Prevents older or token-stale responses from rolling back fresher workspace snapshots. */
 export function shouldAcceptExternalSnapshot(
   current: TrackedSnapshotMeta | undefined,
   nextReport: DeterministicReport,
   nextToken: string | undefined,
   requestedToken: string | undefined,
+  allowSameTokenRefresh = false,
 ): boolean {
   if (nextReport.aqStatus === 'unavailable') return false;
   const curTs = parseObservedMs(current?.observedAt);
   const nextTs = parseObservedMs(nextReport.observedAt);
   if (isOlderTimestamp(curTs, nextTs)) return false;
+  if (curTs !== undefined && nextTs === undefined) return false;
   if (isTokenRaceStale(current, requestedToken, curTs, nextTs)) return false;
-  if (current?.observationId !== undefined && current.observationId === nextReport.observationId) {
-    return nextToken !== undefined && nextToken !== current.token;
-  }
-  return true;
+  return !isRedundantSameObs(current, nextReport, nextToken, allowSameTokenRefresh);
+}
+
+/** Settled remote /api/plan state or fallback error metadata. */
+export interface SettledPlanState {
+  readonly profile: UserProfile;
+  readonly revision: number;
+  readonly locationKey: string;
+  readonly data?: FullPlanOutput;
+  readonly errorCode?: AqErrorCode;
+}
+
+/** Settled /api/plan/briefing response or error state. */
+export interface SettledBriefingState {
+  readonly profile: UserProfile;
+  readonly revision: number;
+  readonly data?: PlanBriefingApiResponse;
+  readonly error?: unknown;
+}
+
+function readSettledLiveAq(plan: FullPlanOutput | undefined) {
+  if (plan === undefined || plan.report.aqStatus === 'unavailable') return undefined;
+  return extractReportLiveAq(plan.report);
+}
+
+function readPlanFields(activeLocPlan: SettledPlanState | undefined, profile: UserProfile) {
+  const data = activeLocPlan?.data;
+  return {
+    liveAq: readSettledLiveAq(data),
+    aqMeta: readAqMetaFromReport(data?.report),
+    snapshotToken: data?.snapshotToken,
+    aqiErrorCode: activeLocPlan?.errorCode,
+    isAqSyncing: activeLocPlan === undefined,
+    syncedPlan: activeLocPlan?.profile === profile ? data : undefined,
+  };
+}
+
+/** Derives UI-ready remote plan and briefing state for the active target. */
+export function buildRemotePlanOutput(
+  profile: UserProfile,
+  revision: number,
+  locationKey: string,
+  settledPlan: SettledPlanState | undefined,
+  briefingState: SettledBriefingState | undefined,
+) {
+  const activeLocPlan =
+    settledPlan !== undefined &&
+    settledPlan.locationKey === locationKey &&
+    settledPlan.revision === revision
+      ? settledPlan : undefined;
+  const activeBriefing =
+    briefingState !== undefined &&
+    briefingState.profile === profile &&
+    briefingState.revision === revision
+      ? briefingState : undefined;
+  return {
+    ...readPlanFields(activeLocPlan, profile),
+    briefing: activeBriefing?.data,
+    isBriefingLoading: activeBriefing === undefined,
+    briefingError: activeBriefing?.error !== undefined,
+  };
 }

@@ -74,6 +74,7 @@ function AppMainResults({ state }: { readonly state: UseSmogPlanResult }): React
       />
       <GroundedAssistant
         profile={profile}
+        selectionRevision={state.presetSelectionRevision}
         observationId={report.observationId}
         snapshotToken={state.snapshotToken}
         onSyncReport={state.syncExternalReport}
