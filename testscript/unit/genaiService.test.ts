@@ -8,6 +8,7 @@ import {
   clearBriefingCache,
   generatePlanBriefing,
 } from '../../server/services/genaiService.js';
+import { executeAssistantToolCall } from '../../server/services/genaiTools.js';
 import { resolveCityPreset } from '../../src/domain/cityPresets.js';
 import { computeFullPlan } from '../../src/domain/impactService.js';
 import type { UserProfile } from '../../src/domain/types.js';
@@ -259,7 +260,7 @@ describe('Grounded Q&A', () => {
       steps: [thought, toolCall],
     }).mockResolvedValueOnce(completed({ claims: ['TOOL_1'] }));
     const result = await askGroundedAssistant({
-      question: 'What fits under ₹50 budget?', profile: makeProfile(),
+      question: 'Annual budget is ₹600, or ₹100 per month. What fits?', profile: makeProfile(),
     });
     expect(result.mode).toBe('gemini_interactions');
     expect(result.answer).toContain('₹50/month');
@@ -272,6 +273,45 @@ describe('Grounded Q&A', () => {
         result: [{ type: 'text', text: expect.stringContaining('"claimId":"TOOL_1"') }],
       }),
     ]);
+  });
+
+  it('withholds online claims and ventilation guidance while representative AQ is pending', async () => {
+    const profile = makeProfile();
+    const baseline = computeFullPlan(profile);
+    const report = {
+      ...baseline.report, aqStatus: 'pending' as const,
+      recommendedHacks: ['ventilation_window', 'wet_mopping'] as const,
+    };
+    const result = await askGroundedAssistant({
+      question: 'What if I commute by bus?', profile, plan: { ...baseline, report },
+    });
+    expect(result).toMatchObject({ mode: 'offline_grounded', citationsUsed: ['AQ:SOURCE'] });
+    expect(result.answer).toContain('representative observation');
+    const briefing = await generatePlanBriefing(profile, report);
+    expect(briefing).toMatchObject({ mode: 'offline_grounded' });
+    expect(briefing.summary).toContain('representative observation');
+    expect(briefing.whyActions).toEqual([expect.stringContaining('Wet Mopping')]);
+    expect(mockInteractionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('executes a deterministic what-if tool only with AQ and outside budget-only mode', () => {
+    const profile = makeProfile({ commuteMode: 'petrol_car' });
+    const report = computeFullPlan(profile).report;
+    const call = {
+      id: 'what-if', name: 'simulate_what_if_scenario',
+      arguments: { commuteMode: 'metro_bus', cookingFuel: 'induction', addCorsiBox: true },
+    };
+    const context = { profile, report, question: 'What if I change my commute?', budgetOnly: false };
+    expect(executeAssistantToolCall(call, context).claim).toContain('metro_bus, induction');
+    const budgetOnlyResult = executeAssistantToolCall(call, { ...context, budgetOnly: true });
+    expect(budgetOnlyResult.claim).toBeUndefined();
+    for (const aqStatus of ['pending', 'unavailable'] as const) {
+      const result = executeAssistantToolCall(call, {
+        ...context, report: { ...report, aqStatus },
+      });
+      expect(result.data).toEqual({ error: 'Tool unavailable for this request' });
+      expect(result.claim).toBeUndefined();
+    }
   });
 
   it('bounds total calls even when each response has pending tools', async () => {
@@ -304,6 +344,42 @@ describe('Grounded Q&A', () => {
     ['६०० रुपये सालाना में क्या मिलेगा?', 'hi', 50],
     ['₹1,200 quarterly', 'en', 400],
     ['₹1,200 semi-annually', 'en', 200],
+    ['My annual budget is ₹600. What fits?', 'en', 50],
+    ['What is my yearly budget under ₹1,200?', 'en', 100],
+    ['Quarterly cap of ₹1,200', 'en', 400],
+    ['Half-yearly cap ₹1,200', 'en', 200],
+    ['Semi-annual allowance: 1,200 INR', 'en', 200],
+    ['मेरा वार्षिक बजट ₹600 है', 'hi', 50],
+    ['सालाना बजट ₹६००', 'hi', 50],
+    ['तिमाही सीमा ₹१,२००', 'hi', 400],
+    ['त्रैमासिक बजट ₹१,२००', 'hi', 400],
+    ['छमाही खर्च ₹१,२००', 'hi', 200],
+    ['अर्धवार्षिक बजट ₹१,२००', 'hi', 200],
+    ['What gives the best annual savings under ₹50?', 'en', 50],
+    ['Best annual savings under ₹50', 'en', 50],
+    ['Annual savings matter. What fits under ₹50?', 'en', 50],
+    ['Annual budget is\n₹50', 'en', 50],
+    ['₹50\n000 options', 'en', 50],
+    ['Annual budget is ₹1,200, or ₹50 per month', 'en', 50],
+    ['Annual budget is ₹600, or ₹100 per month', 'en', 50],
+    ['Annual budget is ₹600 per month', 'en', 600],
+    ['Annual budget is ₹600 [monthly]', 'en', 600],
+    ['Annual budget is ₹600 per household (per quarter)', 'en', 200],
+    ['Annual budget is ₹600 (per household per quarter)', 'en', 200],
+    ['Annual budget is ₹600 per household', 'en', 50],
+    ['Annual budget is ₹600 per week', 'en', 600],
+    ['What can I buy with ₹600 (per year)?', 'en', 50],
+    ['₹600 (annually)', 'en', 50],
+    ['₹600 rupees per year', 'en', 50],
+    ['₹1,200 (per quarter)', 'en', 400],
+    ['₹६०० (सालाना)', 'hi', 50],
+    ['₹६००[सालाना]', 'hi', 50],
+    ['₹600 [per year)', 'en', 600],
+    ['₹१,२०० प्रति तिमाही में क्या मिलेगा?', 'hi', 400],
+    ['₹१,२०० हर तिमाही', 'hi', 400],
+    ['₹१,२०० प्रति छमाही', 'hi', 200],
+    ['₹१,२०० प्रत्येक अर्धवार्षिक', 'hi', 200],
+    ['₹50 p.m.', 'en', 50],
     ['What can I do for ₹50 000 per month?', 'en', 50_000],
     ['What can I do for ₹50\u202f000 per month?', 'en', 50_000],
     ['What can I do for 50\u202f000 INR per month?', 'en', 50_000],
@@ -351,6 +427,12 @@ describe('Grounded Q&A', () => {
     '₹50\u00a0,\u2009123',
     '₹50, ٠٠٠',
     '₹50, 500 per annum',
+    '₹50, 500 p.m.',
+    '₹50, 500 p.a.',
+    '₹50, 500 [p.m.]',
+    '₹50, 500 half-yearly',
+    '₹५०, ५०० हर तिमाही',
+    '₹५०, ५०० प्रत्येक अर्धवार्षिक',
     '₹50, 500 a month',
     '₹50, 500 paise',
     '₹50, 500 Rs.',
@@ -377,6 +459,24 @@ describe('Grounded Q&A', () => {
     const result = await askGroundedAssistant({ question, profile });
     expect(result).toMatchObject({ mode: 'offline_grounded', citationsUsed: [] });
     expect(result.answer).toContain('₹777/month');
+  });
+
+  it.each([1000, 5000])('parses raw whitespace runs of %i characters', (length) => {
+    const gap = ' \t\u202f\u2009'.repeat(length / 4);
+    expect(readBudgetCap(`Annual${gap}budget${gap}is${gap}₹${gap}600`)).toBe(50);
+    expect(readBudgetCap(`₹50${gap}000${gap}per month`)).toBe(50_000);
+    expect(readBudgetCap(`₹50,${gap}500${gap}p.m.`)).toBeUndefined();
+    expect(readBudgetCap(`₹50,${gap}500${gap}p.a.`)).toBeUndefined();
+    expect(readBudgetCap(`₹50${gap}\n${gap}000 options`)).toBe(50);
+    expect(isBudgetQuestion(`${gap}ordinary text${gap}`)).toBe(false);
+    expect(isBudgetQuestion(`${gap}₹${gap}50`)).toBe(true);
+  });
+
+  it('retains a budget stated near the end of a valid long question', async () => {
+    mockEnv('');
+    const question = `${'Please consider all available options. '.repeat(24)}Annual cap ₹600.`;
+    const result = await askGroundedAssistant({ question, profile: makeProfile() });
+    expect(result.answer).toContain('₹50/month');
   });
 
   it('short-circuits unsafe prompts without contacting Gemini', async () => {
@@ -595,6 +695,14 @@ describe('Offline what-if routing', () => {
     });
     expect(nbspBudget.answer).toContain('₹50000/month');
     expect(nbspBudget.answer).not.toContain('₹50/month');
+  });
+
+  it('keeps the requested commute after a fronted exclusion without a comma', async () => {
+    const result = await askGroundedAssistant({
+      profile: drivingProfile,
+      question: 'Instead of taking the bus could I use a two-wheeler?',
+    });
+    expect(result.answer).toContain('2400 g CO2e/day');
   });
 
   it.each([

@@ -95,7 +95,11 @@ const FUEL_MATCHERS: readonly { readonly value: CookingFuel; readonly re: RegExp
   },
 ];
 
-const EXCLUSION_CLAUSE_RE = /\b(?:instead\s+of|rather\s+than)\s+[^,;.?!\n]+/giu;
+const EXCLUSION_CLAUSE_RE = new RegExp(
+  String.raw`\b(?:instead\s+of|rather\s+than)\s+[^,;.?!\r\n\u2028\u2029]+?` +
+  String.raw`(?=\b(?:can|could|should|would|may|might|do)\s+(?:i|we|you)\b|[,;.?!\r\n\u2028\u2029]|$)`,
+  'giu',
+);
 
 function findFirstOption<T>(
   text: string,
@@ -232,12 +236,12 @@ export function buildBriefingActions(profile: UserProfile, report: Deterministic
   const claims = buildGroundedClaims(profile, report);
   const ranked = rankIAQHacksByBudget(profile);
   const hacks = report.recommendedHacks.flatMap((id) => ranked.filter((hack) => hack.id === id));
-  return new Map(hacks.map((hack) => {
+  return new Map(hacks.flatMap((hack) => {
     const title = hi ? hack.nameHi : hack.name;
     const guidance = hack.id === 'ventilation_window'
       ? claims.get('VENTILATION')
       : hi ? hack.instructionsHi : hack.instructions;
-    return [hack.id, `${title}. ${guidance ?? ''}`];
+    return guidance === undefined ? [] : [[hack.id, `${title}. ${guidance}`] as const];
   }));
 }
 

@@ -620,7 +620,7 @@ it('ignores stale syncExternalReport closures from an earlier selection revision
   }
 });
 
-it('preserves fresher assistant snapshot when in-flight /api/plan rejects with 503 LIVE_AQ_UNAVAILABLE', async () => {
+it.each(['tok-fresh', undefined])('preserves fresher assistant AQ after a stale 503 (token %s)', async (token) => {
   setupDefaultMocks();
   vi.useFakeTimers();
   try {
@@ -638,14 +638,14 @@ it('preserves fresher assistant snapshot when in-flight /api/plan rejects with 5
 
     const { result } = renderHook(() => useSmogPlan(profile));
     await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); });
-    act(() => { result.current.syncExternalReport(freshReport, 'tok-fresh', undefined); });
+    act(() => { result.current.syncExternalReport(freshReport, token, undefined); });
 
     await act(async () => {
       rejectPlan?.(new apiClient.ApiError('Unavailable', 503, 'LIVE_AQ_UNAVAILABLE'));
       await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS);
     });
     expect(result.current.liveAq?.pm25).toBe(90);
-    expect(result.current.snapshotToken).toBe('tok-fresh');
+    expect(result.current.snapshotToken).toBe(token);
     expect(result.current.aqiError).toBeUndefined();
     expect(result.current.briefing?.observationId).toBe(freshObsId);
   } finally {

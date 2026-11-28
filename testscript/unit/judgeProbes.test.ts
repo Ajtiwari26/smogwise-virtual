@@ -34,6 +34,27 @@ describe.each(['offline_grounded', 'gemini_interactions'])(
       '₹50, 12 options',
       '५० रुपये।',
       '₹५०',
+      'My annual budget is ₹600. What fits?',
+      'Annual budget is ₹600, or ₹100 per month',
+      'Annual budget is ₹1,200, or ₹50 per month',
+      'Best annual savings under ₹50',
+      'What gives the best annual savings under ₹50?',
+      'Annual savings matter. What fits under ₹50?',
+      'Annual budget is\n₹50',
+      'What can I buy with ₹600 (per year)?',
+      '₹600 (annually)',
+      '₹600 [per year]',
+      '₹600 (per household per year)',
+      '₹600 rupees per year',
+      '₹६०० (सालाना)',
+      'मेरा वार्षिक बजट ₹600 है',
+      'सालाना बजट ₹६००',
+      '₹150 per quarter',
+      '₹१५० प्रति तिमाही',
+      '₹१५० हर तिमाही',
+      '₹३०० प्रति छमाही',
+      'Annual budget is ₹50 [monthly]',
+      '₹50 p.m.',
     ])('accepts %j', (answer) => {
       expect(isGroundedBudgetReplyValid(answer, mode)).toBe(true);
     });
@@ -81,6 +102,12 @@ describe.each(['offline_grounded', 'gemini_interactions'])(
       '₹50, 500 annually',
       '₹50, 500 quarterly',
       '₹50, 500 per annum',
+      '₹50, 500 p.m.',
+      '₹50, 500 p.a.',
+      '₹50, 500 (p.m.)',
+      '₹50, 500 half-yearly',
+      '₹५०, ५०० हर तिमाही',
+      '₹५०, ५०० प्रत्येक अर्धवार्षिक',
       '₹50, 500 per-year',
       '₹50, 500 a month',
       '₹50, 500 per hr',
@@ -152,6 +179,17 @@ describe.each(['offline_grounded', 'gemini_interactions'])(
       '50 rupees−crore',
       '₹50 rupees−crore',
       '₹५० पैसे',
+      'What is my yearly budget under ₹1,200?',
+      'Quarterly cap of ₹1,200',
+      'Half-yearly cap ₹1,200',
+      '₹1,200 (per quarter)',
+      '₹१,२०० प्रति तिमाही में क्या मिलेगा?',
+      '₹१,२०० हर तिमाही',
+      '₹१,२०० प्रति छमाही',
+      '₹50 per year',
+      '₹50 per week',
+      '₹600 [per year)',
+      '₹600.01 per year',
     ])('rejects %j', (answer) => {
       expect(isGroundedBudgetReplyValid(answer, mode)).toBe(false);
     });
@@ -170,11 +208,20 @@ describe.each(['offline_grounded', 'gemini_interactions'])(
       expect(isGroundedBudgetReplyValid(`₹50 ${dash} lakh`, mode)).toBe(false);
       expect(isGroundedBudgetReplyValid(`₹50${dash}crore`, mode)).toBe(false);
     });
+
+    it.each([1000, 5000])('handles raw whitespace runs of %i characters', (length) => {
+      const gap = ' \t\u202f\u2009'.repeat(length / 4);
+      expect(isGroundedBudgetReplyValid(`₹${gap}600${gap}[per${gap}year]`, mode)).toBe(true);
+      expect(isGroundedBudgetReplyValid(`-${gap}₹${gap}50`, mode)).toBe(false);
+      expect(isGroundedBudgetReplyValid(`₹50${gap}000`, mode)).toBe(false);
+      expect(isGroundedBudgetReplyValid(`₹50,${gap}500${gap}p.m.`, mode)).toBe(false);
+      expect(isGroundedBudgetReplyValid(`₹50,${gap}500${gap}p.a.`, mode)).toBe(false);
+    });
   },
 );
 
-it('enforces offline mode dose-claim restriction and rejects guard refusals', () => {
-  const answer = 'Under ₹50 with 120 µg/day dose.';
+it.each(['µg/day', 'μg / day', 'ug/day', 'μg/दिन'])('enforces the offline restriction for %s', (unit) => {
+  const answer = `Under ₹50 with 120 ${unit} dose.`;
   expect(isGroundedBudgetReplyValid(answer, 'offline_grounded')).toBe(false);
   expect(isGroundedBudgetReplyValid(answer, 'gemini_interactions')).toBe(true);
   expect(isGroundedBudgetReplyValid('Under ₹50 option.', 'guard_refusal')).toBe(false);

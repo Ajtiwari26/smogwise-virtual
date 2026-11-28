@@ -4,6 +4,7 @@
 
 import { z } from 'zod';
 import {
+  MAX_ASSISTANT_QUESTION_LENGTH,
   MAX_BUDGET_INR,
   MAX_COMMUTE_KM,
   MAX_HOUSEHOLD_SIZE,
@@ -81,8 +82,8 @@ export const WhatIfSchema = z
 /** Zod schema validating POST /api/ai/ask payload. */
 export const AiAskSchema = z
   .object({
-    question: z.string().trim().min(1).max(1000).optional(),
-    query: z.string().trim().min(1).max(1000).optional(),
+    question: z.string().trim().min(1).max(MAX_ASSISTANT_QUESTION_LENGTH).optional(),
+    query: z.string().trim().min(1).max(MAX_ASSISTANT_QUESTION_LENGTH).optional(),
     city: z
       .string()
       .trim()

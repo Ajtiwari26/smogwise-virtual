@@ -3,6 +3,7 @@
  */
 
 import React from 'react';
+import { MAX_ASSISTANT_QUESTION_LENGTH } from '../domain/constants.js';
 import type { AiAskApiResponse } from '../services/apiClient.js';
 import { formatGeminiLabel } from './modelAttribution.js';
 
@@ -104,7 +105,9 @@ export const AssistantAnswerCard: React.FC<{
           {formatAssistantMode(response.mode, isHi, response.modelUsed)}
         </span>
         {response.guardTriggered && (
-          <span className="rounded bg-red-900 px-2 py-0.5 text-white">Guard Active</span>
+          <span className="rounded bg-red-900 px-2 py-0.5 text-white">
+            {isHi ? 'सुरक्षा गार्ड सक्रिय' : 'Guard Active'}
+          </span>
         )}
       </div>
       {isStaleObservation && (
@@ -171,11 +174,12 @@ export const AssistantForm: React.FC<{
         id="assistant-input"
         type="text"
         value={question}
+        maxLength={MAX_ASSISTANT_QUESTION_LENGTH}
         aria-invalid={isFieldInvalid}
         aria-describedby={hasError ? 'assistant-error' : undefined}
         onChange={(e) => onQuestionChange(e.target.value)}
         placeholder={placeholderText}
-        className="flex-1 rounded-md border border-slate-500 bg-white px-3 py-1.5 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700"
+        className="min-w-0 flex-1 rounded-md border border-slate-500 bg-white px-3 py-1.5 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700"
       />
       <button
         type="submit"

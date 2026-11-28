@@ -214,6 +214,7 @@ describe('GroundedAssistant', () => {
       const pendingSignal = spy.mock.calls.at(-1)?.[2];
       expect(pendingSignal?.aborted).toBe(false);
       expect(screen.getByRole('button', { name: 'Thinking...' })).toBeDisabled();
+      expect(screen.queryByText(answer.answer)).not.toBeInTheDocument();
 
       rerender(<GroundedAssistant profile={{ ...profile, ...change }} />);
       expect(pendingSignal?.aborted).toBe(true);
@@ -260,6 +261,7 @@ describe('GroundedAssistant', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
     expect(spy).not.toHaveBeenCalled();
     const input = screen.getByLabelText('Ask a smog safety question');
+    expect(input).toHaveAttribute('maxlength', '1000');
     fireEvent.change(input, { target: { value: '  Is N95 needed?  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Ask' }));
     await waitFor(() => {
@@ -274,7 +276,7 @@ describe('GroundedAssistant', () => {
     await waitFor(() => {
       expect(screen.getByText('दोपहर में खिड़कियाँ खोलें।')).toBeInTheDocument();
     });
-    expect(screen.getByText('Guard Active')).toBeInTheDocument();
+    expect(screen.getByText('सुरक्षा गार्ड सक्रिय')).toBeInTheDocument();
   });
 });
 

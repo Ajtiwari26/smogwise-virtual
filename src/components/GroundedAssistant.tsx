@@ -58,6 +58,7 @@ function dispatchAssistantAsk(
   const controller = new AbortController();
   abortRef.current = controller;
   const sentRev = syncMetaRef.current.rev;
+  setResponse(undefined);
   setIsLoading(true);
   setErrorCode(null);
 
@@ -214,7 +215,7 @@ export const GroundedAssistant: React.FC<GroundedAssistantProps> = React.memo(
           onQuestionChange={handleQuestionChange}
           onSubmit={handleFormSubmit}
         />
-        <div aria-live="polite" className="mt-3">
+        <div aria-live="polite" aria-busy={isLoading} className="mt-3">
           {errorMsg.length > 0 && (
             <p id="assistant-error" role="alert" className="mb-2 text-xs font-semibold text-red-800">
               {errorMsg}

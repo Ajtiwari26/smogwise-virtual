@@ -4,9 +4,7 @@
 
 import type { Server } from 'node:http';
 import path from 'node:path';
-import {
-  BUDGET_AMOUNT_END, BUDGET_CURRENCY, BUDGET_NUMBER_START,
-} from '../../server/services/genaiBudget.js';
+import { mentionsMonthlyBudget } from '../../server/services/genaiBudget.js';
 import type { AnalyzerResult } from './types.js';
 import {
   closeServerSafely, isPlainRecord, listSourceFiles, readExcerpt,
@@ -126,18 +124,11 @@ async function probeSinglePersona(baseUrl: string, spec: PersonaSpec): Promise<P
   }
 }
 
-const CAP = '(?:50|५०)';
-const FIFTY_RE = new RegExp(
-  String.raw`(?<!\p{Nd}|[−-]\s*)${BUDGET_CURRENCY}\s*${CAP}${BUDGET_AMOUNT_END}|` +
-  String.raw`${BUDGET_NUMBER_START}(?<![−-]\s*${BUDGET_CURRENCY}\s*)${CAP}\s*${BUDGET_CURRENCY}${BUDGET_AMOUNT_END}`,
-  'iu',
-);
-
-/** Validates whether an assistant budget reply mentions exact ₹50/५० cap cleanly. */
+/** Validates whether an assistant budget reply mentions the equivalent of exactly ₹50/month. */
 export function isGroundedBudgetReplyValid(answer: string, mode: unknown): boolean {
-  const hasCap = FIFTY_RE.test(answer.normalize('NFKC'));
+  const hasCap = mentionsMonthlyBudget(answer, 50);
   if (mode === 'offline_grounded') {
-    return hasCap && !/µg\/day|ug\/day/i.test(answer);
+    return hasCap && !/[µμu]g\s*\/\s*(?:day\b|दिन)/iu.test(answer);
   }
   return mode === 'gemini_interactions' && hasCap;
 }

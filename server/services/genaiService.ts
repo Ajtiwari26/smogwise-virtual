@@ -111,7 +111,10 @@ export async function generatePlanBriefing(
   const fallback = () => buildOfflineBriefingResponse(profile, report);
   return briefingSingleflight.run(cacheKey, async (isCurrent) => {
     const { geminiApiKey } = getEnvConfig();
-    if (geminiApiKey.length === 0 || report.aqStatus === 'unavailable') return fallback();
+    const { aqStatus } = report;
+    if (geminiApiKey.length === 0 || aqStatus === 'unavailable' || aqStatus === 'pending') {
+      return fallback();
+    }
     const parsed = await requestBriefing(geminiApiKey, profile, report);
     if (parsed === null) return fallback();
     if (isCurrent()) briefingCache.set(cacheKey, parsed);
@@ -151,7 +154,8 @@ async function runOnlineAssistant(
   plan: FullPlanOutput,
 ): Promise<AskAssistantResponse | null> {
   const { geminiApiKey } = getEnvConfig();
-  if (geminiApiKey.length === 0 || plan.report.aqStatus === 'unavailable') return null;
+  const { aqStatus } = plan.report;
+  if (geminiApiKey.length === 0 || aqStatus === 'unavailable' || aqStatus === 'pending') return null;
   const sys = buildSystemInstruction(input.profile.language);
   const claims = answerClaims(question, input.profile, plan.report);
   const prompt = buildUserPrompt(question, input.profile, plan, claims);

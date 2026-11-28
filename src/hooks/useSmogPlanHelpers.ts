@@ -55,16 +55,16 @@ function handleSyncFailure(
   profile: UserProfile,
   revision: number,
   locationKey: string,
-  tokenForPlan: string | undefined,
+  locForPlan: SettledLocRef | undefined,
   locRef: React.MutableRefObject<SettledLocRef | undefined>,
   setSettledPlan: React.Dispatch<React.SetStateAction<SettledPlanState | undefined>>,
   setBriefingState: React.Dispatch<React.SetStateAction<SettledBriefingState | undefined>>,
 ): void {
   const activeLoc = readActiveLoc(locRef.current, locationKey, revision);
-  if (activeLoc?.token !== undefined && tokenForPlan !== activeLoc.token) return;
+  if (activeLoc !== locForPlan) return;
   const errorCode = resolveAqErrorCode(error);
   const keepValid = errorCode !== 'LIVE_AQ_UNAVAILABLE' && activeLoc !== undefined;
-  locRef.current = keepValid && activeLoc.token !== undefined
+  locRef.current = keepValid
     ? { ...activeLoc, errorCode }
     : { key: locationKey, revision, errorCode };
   setSettledPlan((prev) => {
@@ -163,7 +163,8 @@ function schedulePlanSync(
   const cached = readActiveLoc(locRef.current, locationKey, revision);
   if (cached?.errorCode === 'LIVE_AQ_UNAVAILABLE') return () => controller.abort();
   const planTimer = setTimeout(() => {
-    const tokenForPlan = readActiveLoc(locRef.current, locationKey, revision)?.token;
+    const locForPlan = readActiveLoc(locRef.current, locationKey, revision);
+    const tokenForPlan = locForPlan?.token;
     const startedAt = Date.now();
     void postPlan(profile, controller.signal, tokenForPlan).then(
       (data) => {
@@ -184,7 +185,7 @@ function schedulePlanSync(
         const cur = isTargetCurrent(latestTargetRef.current, locationKey, revision);
         if (!controller.signal.aborted && cur) {
           handleSyncFailure(
-            error, profile, revision, locationKey, tokenForPlan,
+            error, profile, revision, locationKey, locForPlan,
             locRef, setSettledPlan, setBriefingState,
           );
         }

@@ -74,6 +74,9 @@ export const MAX_COMMUTE_KM = 200;
 /** Maximum monthly household IAQ budget in INR. */
 export const MAX_BUDGET_INR = 500_000;
 
+/** Maximum length of a question accepted by the grounded assistant. */
+export const MAX_ASSISTANT_QUESTION_LENGTH = 1000;
+
 /** Maximum household member count. */
 export const MAX_HOUSEHOLD_SIZE = 20;
 

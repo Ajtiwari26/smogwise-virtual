@@ -4,6 +4,7 @@ import { stripCitationTags } from './textSanitizer.js';
  */
 
 import { getEnvConfig } from '../config/env.js';
+import { MAX_ASSISTANT_QUESTION_LENGTH } from '../../src/domain/constants.js';
 import { escapeXml, stripZeroWidthAndBidi } from './locationGuard.js';
 
 /** Result of inspecting and sanitizing a user prompt. */
@@ -126,26 +127,29 @@ export function stripDisallowedCitationTags(
     .trim();
 }
 
-function stripControlChars(input: string, replacement = ''): string {
+function stripControlChars(input: string, replacement = '', keepLineBreaks = false): string {
+  const allowedControls = keepLineBreaks ? '\r\n' : '';
   let out = '';
   for (let i = 0; i < input.length; i += 1) {
     const code = input.charCodeAt(i);
-    out += code < 32 || (code >= 127 && code <= 159) ? replacement : (input[i] ?? '');
+    const char = input.charAt(i);
+    const isControl = code < 32 || (code >= 127 && code <= 159);
+    out += isControl && !allowedControls.includes(char) ? replacement : char;
   }
   return out;
 }
 
 function sanitizeText(text: string): string {
   return stripDisallowedCitationTags(stripAngleTagNoise(text))
-    .replace(/\s+/g, ' ')
+    .replace(/[^\S\r\n\u2028\u2029]+/g, ' ')
     .trim()
-    .slice(0, 800);
+    .slice(0, MAX_ASSISTANT_QUESTION_LENGTH);
 }
 
 function getScanVariants(text: string): readonly [string, ...string[]] {
   const joined = stripControlChars(text);
   // Check both word boundaries and controls that split a word or tag.
-  return joined.length === text.length ? [text] : [stripControlChars(text, ' '), joined];
+  return joined.length === text.length ? [text] : [stripControlChars(text, ' ', true), joined];
 }
 
 /**

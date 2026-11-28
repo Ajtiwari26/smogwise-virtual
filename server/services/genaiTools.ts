@@ -136,8 +136,9 @@ export function executeAssistantToolCall(
   if (call.name === 'filter_iaq_hacks_by_budget') {
     return runBudgetHackTool(call, context.profile, context.question);
   }
+  const { aqStatus } = context.report;
   if (call.name === 'simulate_what_if_scenario' && !context.budgetOnly
-    && context.report.aqStatus !== 'unavailable') {
+    && aqStatus !== 'unavailable' && aqStatus !== 'pending') {
     return runWhatIfTool(call, context);
   }
   return { callId: call.id, name: call.name, data: { error: 'Tool unavailable for this request' } };
