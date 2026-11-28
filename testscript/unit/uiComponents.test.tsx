@@ -1030,4 +1030,32 @@ describe('ScenarioPresetBar', () => {
     expect(onSyncReport).not.toHaveBeenCalled();
     expect(screen.queryByText('Stale rev-0 reply')).not.toBeInTheDocument();
   });
+
+  it('marks older observation replies clearly when dashboard holds a newer observationId', async () => {
+    const profile = makeProfile();
+    const report42 = computeFullPlan(profile, { pm25: 42, observedAt: '2026-11-28T06:00' }).report;
+    const report90 = computeFullPlan(profile, { pm25: 90, observedAt: '2026-11-28T09:00' }).report;
+    vi.spyOn(apiClient, 'postAiAsk').mockResolvedValue({
+      answer: 'Ventilation guidance based on PM2.5 42.',
+      language: 'en',
+      mode: 'offline_grounded',
+      citationsUsed: ['CALC:VENTILATION'],
+      guardTriggered: false,
+      snapshotToken: 'tok-42',
+      report: report42,
+    });
+    render(
+      <GroundedAssistant
+        profile={profile}
+        observationId={report90.observationId}
+        snapshotToken="tok-90"
+        onSyncReport={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'When is the safest time to ventilate today?' }));
+    await waitFor(() => {
+      expect(screen.getByText(/Based on an earlier air quality reading/)).toBeInTheDocument();
+    });
+    expect(screen.getByText('Ventilation guidance based on PM2.5 42.')).toBeInTheDocument();
+  });
 });

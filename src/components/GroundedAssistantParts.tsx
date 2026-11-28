@@ -93,7 +93,10 @@ export const QuickPromptsBar: React.FC<{
 export const AssistantAnswerCard: React.FC<{
   readonly response: AiAskApiResponse;
   readonly isHi: boolean;
-}> = React.memo(function AssistantAnswerCard({ response, isHi }) {
+  readonly isStaleObservation?: boolean;
+}> = React.memo(function AssistantAnswerCard({
+  response, isHi, isStaleObservation = false,
+}) {
   return (
     <div className="rounded-md border border-slate-300 bg-slate-50 p-3">
       <div className="mb-1 flex flex-wrap items-center gap-2 text-xs font-semibold">
@@ -104,6 +107,16 @@ export const AssistantAnswerCard: React.FC<{
           <span className="rounded bg-red-900 px-2 py-0.5 text-white">Guard Active</span>
         )}
       </div>
+      {isStaleObservation && (
+        <p
+          role="status"
+          className="mb-2 rounded border border-amber-700 bg-amber-50 px-2.5 py-1.5 text-xs font-semibold text-amber-950"
+        >
+          {isHi
+            ? 'यह उत्तर पुराने वायु गुणवत्ता डेटा पर आधारित है — वर्तमान डैशबोर्ड के अनुसार नया उत्तर पाने के लिए फिर से पूछें।'
+            : 'Based on an earlier air quality reading — ask again to match the current dashboard.'}
+        </p>
+      )}
       <p className="text-sm text-slate-900">{response.answer}</p>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {response.citationsUsed.map((cite) => (

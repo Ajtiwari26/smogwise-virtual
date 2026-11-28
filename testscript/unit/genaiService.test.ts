@@ -390,5 +390,29 @@ describe('Grounded Q&A', () => {
     });
     expect(keepElectricStove.answer).toContain('0 g CO2e/day');
     expect(keepElectricStove.answer).not.toContain('640');
+
+    const electricBusCommute = await askGroundedAssistant({
+      question: 'Should I switch to electric bus?',
+      profile: makeProfile({ commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'lpg' }),
+    });
+    expect(electricBusCommute.answer).toContain('3200 g CO2e/day');
+    expect(electricBusCommute.answer).not.toContain('3930');
+
+    const hiKeepInductionOnly = await askGroundedAssistant({
+      question: 'क्या मैं बस इंडक्शन रखूँ?',
+      profile: makeProfile({
+        language: 'hi', commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'induction',
+      }),
+    });
+    expect(hiKeepInductionOnly.answer).toContain('0 g CO2e');
+    expect(hiKeepInductionOnly.answer).not.toContain('3200');
+
+    const hiLpgOnly = await askGroundedAssistant({
+      question: 'क्या एलपीजी चुनें?',
+      profile: makeProfile({
+        language: 'hi', commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'biomass_chulha',
+      }),
+    });
+    expect(hiLpgOnly.answer).not.toContain('3200 g CO2e/day');
   });
 });

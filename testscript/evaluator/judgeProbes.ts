@@ -132,10 +132,12 @@ async function probeSinglePersona(
 }
 
 const D = '0-9\\u0966-\\u096F';
-const SUF = `(?![${D}]|[.,][${D}])`;
-const CURRENCY_FIFTY_RE = new RegExp(`(?:^|[^${D}])₹\\s*(?:50|५०)${SUF}`, 'u');
+const WB = '(?![\\p{L}\\p{M}\\d_])';
+const MULT = `(?:k\\b|cr\\b|(?:thousand|lakh|lac|million|crore|हज़ार|लाख|करोड़)${WB})`;
+const SUF = `(?![${D}]|[.,][${D}]|\\s*${MULT})`;
+const CURRENCY_FIFTY_RE = new RegExp(`(?:^|[^${D}])₹\\s*(?:50|५०)${SUF}`, 'iu');
 const UNIT_FIFTY_RE = new RegExp(
-  `(?:^|[^${D}.,])(?:50|५०)\\s*(?:INR|rupees?|रुपये)${SUF}`, 'iu');
+  `(?:^|[^${D}.,])(?:50|५०)\\s*(?:INR|rupees?|रुपये)${WB}${SUF}`, 'iu');
 
 /** Validates whether an assistant budget reply mentions exact ₹50/५० cap cleanly. */
 export function isGroundedBudgetReplyValid(answer: string, mode: unknown): boolean {

@@ -619,3 +619,99 @@ it('ignores stale syncExternalReport closures from an earlier selection revision
     cleanupTestState();
   }
 });
+
+it('preserves fresher assistant snapshot when in-flight /api/plan rejects with 503 LIVE_AQ_UNAVAILABLE', async () => {
+  setupDefaultMocks();
+  vi.useFakeTimers();
+  try {
+    const { computeFullPlan } = await import('../../src/domain/impactService.js');
+    const customLoc = { name: 'Distant Custom', lat: 28.9, lon: 77.9 };
+    const profile = { ...DEFAULT_PROFILE, customLocation: customLoc };
+    const freshLive: LiveAqOverride = { pm25: 90, observedAt: '2026-11-28T09:00:00Z' };
+    const freshReport = computeFullPlan(profile, freshLive).report;
+    const freshObsId = resolveReportAq(profile, freshLive).observationId;
+    let rejectPlan: ((err: unknown) => void) | undefined;
+    mockedPostPlan.mockImplementation(() => new Promise((_, reject) => { rejectPlan = reject; }));
+    mockedPostPlanBriefing.mockResolvedValue({
+      ...mockBriefingResponse, observationId: freshObsId,
+    });
+
+    const { result } = renderHook(() => useSmogPlan(profile));
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); });
+    act(() => { result.current.syncExternalReport(freshReport, 'tok-fresh', undefined); });
+
+    await act(async () => {
+      rejectPlan?.(new apiClient.ApiError('Unavailable', 503, 'LIVE_AQ_UNAVAILABLE'));
+      await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS);
+    });
+    expect(result.current.liveAq?.pm25).toBe(90);
+    expect(result.current.snapshotToken).toBe('tok-fresh');
+    expect(result.current.aqiError).toBeUndefined();
+    expect(result.current.briefing?.observationId).toBe(freshObsId);
+  } finally {
+    cleanupTestState();
+  }
+});
+
+it('refreshes /api/plan/briefing when assistant update lands before dispatch, mid-flight, or post-settle', async () => {
+  setupDefaultMocks();
+  vi.useFakeTimers();
+  try {
+    const { computeFullPlan } = await import('../../src/domain/impactService.js');
+    const aq42: LiveAqOverride = { pm25: 42, observedAt: '2026-11-28T06:00:00Z' };
+    const aq90: LiveAqOverride = { pm25: 90, observedAt: '2026-11-28T09:00:00Z' };
+    const obs42 = resolveReportAq(DEFAULT_PROFILE, aq42).observationId;
+    const obs90 = resolveReportAq(DEFAULT_PROFILE, aq90).observationId;
+    const report90 = computeFullPlan(DEFAULT_PROFILE, aq90).report;
+    mockedPostPlan.mockResolvedValue({
+      ...computeFullPlan(DEFAULT_PROFILE, aq42), snapshotToken: 'tok-42',
+    });
+
+    // Stage 1: before briefing dispatch
+    mockedPostPlanBriefing.mockResolvedValue({ ...mockBriefingResponse, observationId: obs90 });
+    const hookBefore = renderHook(() => useSmogPlan());
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); });
+    act(() => { hookBefore.result.current.syncExternalReport(report90, 'tok-90', 'tok-42'); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS); });
+    expect(mockedPostPlanBriefing).toHaveBeenCalledTimes(1);
+    expect(mockedPostPlanBriefing).toHaveBeenCalledWith(
+      expect.objectContaining({ cityId: DEFAULT_PROFILE.cityId }), expect.any(AbortSignal), 'tok-90',
+    );
+    expect(hookBefore.result.current.briefing?.observationId).toBe(obs90);
+    hookBefore.unmount();
+
+    // Stage 2: during in-flight briefing + Stage 3: post-settle replacement
+    mockedPostPlanBriefing.mockReset();
+    let resolveInFlight: ((val: PlanBriefingApiResponse) => void) | undefined;
+    mockedPostPlanBriefing
+      .mockImplementationOnce(() => new Promise((r) => { resolveInFlight = r; }))
+      .mockResolvedValueOnce({ ...mockBriefingResponse, observationId: obs90 });
+    const hookDuring = renderHook(() => useSmogPlan());
+    await act(async () => { await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS); });
+    act(() => { hookDuring.result.current.syncExternalReport(report90, 'tok-90', 'tok-42'); });
+    await act(async () => {
+      resolveInFlight?.({ ...mockBriefingResponse, observationId: obs42 });
+      await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS);
+    });
+    expect(hookDuring.result.current.briefing?.observationId).toBe(obs90);
+    expect(hookDuring.result.current.briefingFailed).toBe(false);
+    hookDuring.unmount();
+
+    // Stage 3: post-settle replacement
+    const aq95: LiveAqOverride = { pm25: 95, observedAt: '2026-11-28T10:00:00Z' };
+    const obs95 = resolveReportAq(DEFAULT_PROFILE, aq95).observationId;
+    const report95 = computeFullPlan(DEFAULT_PROFILE, aq95).report;
+    mockedPostPlanBriefing
+      .mockResolvedValueOnce({ ...mockBriefingResponse, observationId: obs42 })
+      .mockResolvedValueOnce({ ...mockBriefingResponse, observationId: obs95 });
+    const hookAfter = renderHook(() => useSmogPlan());
+    await act(async () => { await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS); });
+    expect(hookAfter.result.current.briefing?.observationId).toBe(obs42);
+    act(() => { hookAfter.result.current.syncExternalReport(report95, 'tok-95', 'tok-42'); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS); });
+    expect(hookAfter.result.current.briefing?.observationId).toBe(obs95);
+    hookAfter.unmount();
+  } finally {
+    cleanupTestState();
+  }
+});

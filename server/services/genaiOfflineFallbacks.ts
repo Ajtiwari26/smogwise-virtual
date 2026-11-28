@@ -19,13 +19,20 @@ import type {
 } from '../../src/domain/types.js';
 
 const PLANTS_QUESTION_RE = /\bplants?\b|houseplant|indoor\s*plant|areca|spider\s*plant|पौध|गमल/iu;
+const HI_BUS_TERM =
+  '(?:सिटी|पब्लिक|सरकारी|इलेक्ट्रिक)\\s+बस|मेट्रो(?:\\s*[/,]\\s*|\\s+(?:या|व)\\s+)बस|' +
+  'बस\\s+(?:से|में|पर|द्वारा|यात्रा|सफर|पास|कम्यूट)';
+const ELECTRIC_COOK_TERM =
+  'electric(?!\\s+(?:bus|car|vehicle|bike|scooter|cycle|auto|rickshaw|metro|train|two[- ]?wheeler))';
 const COMMUTE_WHAT_IF_RE = new RegExp(
-  'commute|carpool|metro|bus|petrol|wfh|walk|two[- ]?wheeler|' +
-  'आवागमन|यातायात|पैदल|मेट्रो|बस|कारपूल',
+  `commute|carpool|metro|bus|petrol|wfh|walk|two[- ]?wheeler|आवागमन|यातायात|पैदल|मेट्रो|कारपूल|${HI_BUS_TERM}`,
   'iu',
 );
-const FUEL_WHAT_IF_RE =
-  /cooking|fuel|stove|chulha|induction|electric|lpg|biomass|ईंधन|चूल्हा|रसोई|इंडक्शन/iu;
+const FUEL_WHAT_IF_RE = new RegExp(
+  `cooking|fuel|stove|chulha|induction|${ELECTRIC_COOK_TERM}|lpg|biomass|` +
+  'ईंधन|चूल्हा|रसोई|इंडक्शन|एलपीजी|स्टोव',
+  'iu',
+);
 const GENERIC_WHAT_IF_RE = /what[- ]?if|तुलना/iu;
 
 /** Returns true for site-independent houseplant-vs-HEPA questions. */
@@ -47,14 +54,14 @@ function isAqMissing(report: DeterministicReport): boolean {
 
 const COMMUTE_MATCHERS: readonly { readonly value: CommuteMode; readonly re: RegExp }[] = [
   { value: 'wfh_walk', re: /wfh|walk|पैदल/iu },
-  { value: 'metro_bus', re: /metro|bus|मेट्रो|बस/iu },
+  { value: 'metro_bus', re: new RegExp(`metro|bus|मेट्रो|${HI_BUS_TERM}`, 'iu') },
   { value: 'carpool', re: /carpool|कारपूल/iu },
   { value: 'two_wheeler', re: /two[- ]?wheeler/iu },
   { value: 'petrol_car', re: /petrol/iu },
 ];
 
 const FUEL_MATCHERS: readonly { readonly value: CookingFuel; readonly re: RegExp }[] = [
-  { value: 'induction', re: /induction|electric|इंडक्शन/iu },
+  { value: 'induction', re: new RegExp(`induction|${ELECTRIC_COOK_TERM}|इंडक्शन`, 'iu') },
   { value: 'lpg', re: /lpg|एलपीजी/iu },
   { value: 'biomass_chulha', re: /biomass|chulha|चूल्हा/iu },
 ];

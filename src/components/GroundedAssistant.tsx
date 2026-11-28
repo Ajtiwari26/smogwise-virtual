@@ -191,6 +191,9 @@ export const GroundedAssistant: React.FC<GroundedAssistantProps> = React.memo(
       profile, selectionRevision, observationId, snapshotToken, onSyncReport,
     );
     const errorMsg = formatAssistantError(errorCode, isHi);
+    const isStaleObs = response !== undefined && response.mode !== 'guard_refusal' &&
+      observationId !== undefined && response.report.observationId !== undefined &&
+      response.report.observationId !== observationId;
 
     return (
       <section
@@ -217,7 +220,9 @@ export const GroundedAssistant: React.FC<GroundedAssistantProps> = React.memo(
               {errorMsg}
             </p>
           )}
-          {response !== undefined && <AssistantAnswerCard response={response} isHi={isHi} />}
+          {response !== undefined && (
+            <AssistantAnswerCard response={response} isHi={isHi} isStaleObservation={isStaleObs} />
+          )}
         </div>
       </section>
     );

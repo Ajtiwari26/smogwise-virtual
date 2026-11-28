@@ -239,6 +239,26 @@ function readPlanFields(activeLocPlan: SettledPlanState | undefined, profile: Us
   };
 }
 
+/** Current target identity used to discard stale async callbacks. */
+export interface SyncTarget {
+  readonly locationKey: string;
+  readonly revision: number;
+}
+
+/** Returns true when locationKey and revision still match the active target. */
+export function isTargetCurrent(target: SyncTarget, key: string, revision: number): boolean {
+  return target.locationKey === key && target.revision === revision;
+}
+
+/** Updates snapshotToken on settled plan state when a plan exists. */
+export function setTokenIfPresent(
+  prev: SettledPlanState | undefined,
+  token: string,
+): SettledPlanState | undefined {
+  if (prev?.data === undefined) return prev;
+  return { ...prev, data: { ...prev.data, snapshotToken: token } };
+}
+
 /** Derives UI-ready remote plan and briefing state for the active target. */
 export function buildRemotePlanOutput(
   profile: UserProfile,

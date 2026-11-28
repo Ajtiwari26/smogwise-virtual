@@ -10,6 +10,8 @@ describe('isGroundedBudgetReplyValid ₹50 / ५० boundary checks', () => {
       'Zero-cost options stay within 50 INR.',
       'Even at 50 rupees, window-time ventilation helps.',
       'For ₹50, choose no-cost behavioural actions.',
+      'Wet mopping costs ₹50 monthly.',
+      'Only ₹50/mo needed.',
     ];
     for (const answer of valid) {
       expect(isGroundedBudgetReplyValid(answer, 'gemini_interactions')).toBe(true);
@@ -17,7 +19,7 @@ describe('isGroundedBudgetReplyValid ₹50 / ५० boundary checks', () => {
     }
   });
 
-  it('rejects larger numbers, fractional amounts, and false prefix decimals', () => {
+  it('rejects larger numbers, multipliers, fractional amounts, and word-glued suffixes', () => {
     const invalid = [
       'Try masks for ₹500 per month.',
       '५०० रुपये के भीतर विकल्प देखें।',
@@ -28,6 +30,12 @@ describe('isGroundedBudgetReplyValid ₹50 / ५० boundary checks', () => {
       'केवल ५०.५० रुपये खर्च करें।',
       'Up to ₹50,000 budget.',
       'Budget of 50,000 INR.',
+      'Try masks for ₹50k.',
+      'Budget ₹50K max.',
+      'Costs ₹50 lakh.',
+      'Budget of ₹50cr total.',
+      'Spend ५० लाख रुपये.',
+      'Filter costs 50 INRish today.',
     ];
     for (const answer of invalid) {
       expect(isGroundedBudgetReplyValid(answer, 'gemini_interactions')).toBe(false);
