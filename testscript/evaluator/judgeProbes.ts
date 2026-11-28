@@ -133,8 +133,8 @@ async function probeSinglePersona(
 
 const D = '0-9\\u0966-\\u096F';
 const WB = '(?![\\p{L}\\p{M}\\d_])';
-const MULT = `(?:inr(?=[${D}\\p{L}\\p{M}_])|(?:thousands?|lakhs?|lacs?|millions?|crores?|cr|k|ह(?:ज\\u093C?|\\u095B)ार|लाख|करो(?:ड\\u093C?|\\u095C))${WB})`;
-const SUF = `${WB}(?![${D}]|[.,][${D}]|\\s+(?:[${D}]{2,}|${MULT}))`;
+const MULT = `(?:(?:inr|rupees?)(?=[${D}\\p{L}\\p{M}_])|(?:thousands?|lakhs?|lacs?|millions?|billions?|trillions?|crores?|cr|bn|k|ह(?:ज\\u093C?|\\u095B)ार|लाख|करो(?:ड\\u093C?|\\u095C)|अरब|अर्ब|खरब)${WB})`;
+const SUF = `${WB}(?![${D}]|[.,][${D}]|[.,]?\\s+[${D}]{2,}|\\s+${MULT})`;
 const CURRENCY_FIFTY_RE = new RegExp(`(?:^|[^${D}])₹\\s*(?:50|५०)${SUF}`, 'iu');
 const UNIT_FIFTY_RE = new RegExp(`(?:^|[^${D}.,])(?:50|५०)\\s*(?:INR|rupees?|रुपये)${SUF}`, 'iu');
 

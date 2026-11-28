@@ -444,5 +444,23 @@ describe('Grounded Q&A', () => {
     });
     expect(hiTakeBus.answer).toContain('3200 g CO2e');
     expect(hiTakeBus.answer).not.toContain('3930');
+
+    const nbHyphenBus = await askGroundedAssistant({
+      question: 'Should I switch to electric\u2011bus?',
+      profile: makeProfile({ commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'lpg' }),
+    });
+    expect(nbHyphenBus.answer).toContain('3200 g CO2e/day');
+    expect(nbHyphenBus.answer).not.toContain('3930');
+
+    for (const hiBusQ of ['क्या मैं बस पकड़ूँ?', 'क्या मैं बस ले लूँ?']) {
+      const hiBusAns = await askGroundedAssistant({
+        question: hiBusQ,
+        profile: makeProfile({
+          language: 'hi', commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'lpg',
+        }),
+      });
+      expect(hiBusAns.answer).toContain('3200 g CO2e');
+      expect(hiBusAns.answer).not.toContain('3930');
+    }
   });
 });
