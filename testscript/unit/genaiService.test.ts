@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EnvConfig } from '../../server/config/env.js';
 import * as envConfig from '../../server/config/env.js';
-import { readBudgetCap } from '../../server/services/genaiBudget.js';
+import { isBudgetQuestion, readBudgetCap } from '../../server/services/genaiBudget.js';
 import { buildLocationContextTag } from '../../server/services/genaiPromptBuilders.js';
 import {
   askGroundedAssistant,
@@ -285,29 +285,80 @@ describe('Grounded Q&A', () => {
   });
 
   it.each([
-    ['What works for ₹0?', 'en', '₹0/month'],
-    ['₹५० में क्या करें?', 'hi', '₹50/माह'],
-    ['Can I do this with INR 1,200?', 'en', '₹1200/month'],
-    ['₹50, 120 options are listed below', 'en', '₹50/month'],
-    ['₹50, 12 options', 'en', '₹50/month'],
-    ['What can I do for ₹50 000 per month?', 'en', '₹50000/month'],
+    ['What works for ₹0?', 'en', 0],
+    ['₹५० में क्या करें?', 'hi', 50],
+    ['बजट ५० रुपए है।', 'hi', 50],
+    ['५० रुपयों में क्या मिलेगा?', 'hi', 50],
+    ['Can I do this with INR 1,200?', 'en', 1200],
+    ['Can I do this with 1,200 INR?', 'en', 1200],
+    ['50 INR, 12 options fit.', 'en', 50],
+    ['₹50, 120 options are listed below', 'en', 50],
+    ['₹50, 12 options', 'en', 50],
+    ['₹५०, १२० विकल्प हैं।', 'hi', 50],
+    ['What can I do for ₹50 000 per month?', 'en', 50_000],
+    ['What can I do for ₹50\u202f000 per month?', 'en', 50_000],
+    ['What can I do for 50\u202f000 INR per month?', 'en', 50_000],
+    ['Could I spend 1,23,456.75 rupees?', 'en', 123_456.75],
+    ['What can I buy for ₹123,456.75?', 'en', 123_456.75],
+    ['What works for ₹75.50 or 50.25 INR?', 'en', 50.25],
+    ['There are 2. 50 Rs. is my cap.', 'en', 50],
+    ['What works with +50 INR?', 'en', 50],
+    ['My cap is − ₹50 INR.', 'en', 0],
+    ['My cap is ₹−50.', 'en', 0],
+    ['My cap is -50 rupees.', 'en', 0],
   ] as const)('honors the budget in %s without citing current exposure', async (question, language, cap) => {
     mockEnv('');
+    expect(readBudgetCap(question)).toBe(cap);
     const result = await askGroundedAssistant({ question, profile: makeProfile({ language }) });
-    expect(result.answer).toContain(cap);
+    expect(result.answer).toContain(`₹${cap}/${language === 'hi' ? 'माह' : 'month'}`);
     expect(result.citationsUsed).toEqual([]);
     expect(result.answer).not.toMatch(/µg\/day|ug\/day/);
   });
 
   it.each([
+    'What can I do with 50, 500 INR per month?',
+    'What can I do with 50, 000 rupees?',
+    'What can I do for ₹50, 500 monthly?',
+    'What can I do for ₹50, 500 per year?',
     'The monthly cap is ₹50, 500 per month.',
+    '1234,500 INR',
+    '100, 000 INR',
+    '₹50, 500 INR',
+    '५०, ००० रुपये',
+    '５０， ５００ ＩＮＲ',
     '₹50, 000',
     '₹50 , 000',
+    '₹50, 00',
     '₹50, 12,345',
     '₹50\u00a0,\u2009123',
     '₹50, ٠٠٠',
-  ])('does not read malformed grouping in %s as a cap', (question) => {
+    '₹50, 500 per annum',
+    '₹50, 500 a month',
+    '₹50, 500 paise',
+    '₹50, 500 Rs.',
+    '₹50, 500 thousand',
+    '₹50, 500 approx.',
+    '₹५०, ५०० प्रति\tमाह',
+    '₹५०, ५०० मासिक',
+    '₹५०, ५०० हज़ार',
+    '₹५०, ५०० के आसपास',
+    '₹50, 50 rupees',
+    '₹1,23,45',
+    '12,34,567,890 INR',
+    '1234 50 INR',
+    '₹50 .25 INR',
+    '₹50 thousand',
+    '50 rupees−crore',
+    '₹५० पैसे',
+    '₹50 INRish',
+  ])('uses the profile cap for ambiguous or unsupported amounts in %s', async (question) => {
+    mockEnv('');
+    expect(isBudgetQuestion(question)).toBe(true);
     expect(readBudgetCap(question)).toBeUndefined();
+    const profile = makeProfile({ monthlyBudgetInr: 777 });
+    const result = await askGroundedAssistant({ question, profile });
+    expect(result).toMatchObject({ mode: 'offline_grounded', citationsUsed: [] });
+    expect(result.answer).toContain('₹777/month');
   });
 
   it('short-circuits unsafe prompts without contacting Gemini', async () => {

@@ -4,7 +4,9 @@
 
 import type { Server } from 'node:http';
 import path from 'node:path';
-import { BUDGET_NUMBER_TAIL } from '../../server/services/genaiBudget.js';
+import {
+  BUDGET_AMOUNT_END, BUDGET_CURRENCY, BUDGET_NUMBER_START,
+} from '../../server/services/genaiBudget.js';
 import type { AnalyzerResult } from './types.js';
 import {
   closeServerSafely, isPlainRecord, listSourceFiles, readExcerpt,
@@ -124,23 +126,16 @@ async function probeSinglePersona(baseUrl: string, spec: PersonaSpec): Promise<P
   }
 }
 
-const D = '\\p{Nd}';
-const WB = `(?![${D}\\p{L}\\p{M}_])`;
-const MULT = String.raw`(?:(?:inr|rupees?)(?=[${D}\p{L}\p{M}_])|` +
-  String.raw`(?:thousands?|lakhs?|lacs?|millions?|billions?|trillions?|crores?|cr|bn|k|` +
-  String.raw`ह(?:ज\u093C?|\u095B)ार|लाख|` +
-  String.raw`करो(?:ड\u093C?|\u095C)|अरब|अर्ब|खरब)${WB})`;
-const SUF = String.raw`${WB}(?!${BUDGET_NUMBER_TAIL}|[\p{Pd}\u2212\s]+${MULT})`;
-const UNSIGNED = String.raw`(?<![−-]\s*)`;
 const CAP = '(?:50|५०)';
-const CURRENCY_FIFTY_RE = new RegExp(
-  String.raw`(?<![${D}])${UNSIGNED}(?:₹|\b(?:INR\b|Rs\b\.?))\s*${CAP}${SUF}`, 'iu');
-const UNIT_FIFTY_RE = new RegExp(
-  String.raw`(?<![${D}.,])${UNSIGNED}${CAP}\s*(?:INR|rupees?|रुप(?:ये|ए))${SUF}`, 'iu');
+const FIFTY_RE = new RegExp(
+  String.raw`(?<!\p{Nd}|[−-]\s*)${BUDGET_CURRENCY}\s*${CAP}${BUDGET_AMOUNT_END}|` +
+  String.raw`${BUDGET_NUMBER_START}(?<![−-]\s*${BUDGET_CURRENCY}\s*)${CAP}\s*${BUDGET_CURRENCY}${BUDGET_AMOUNT_END}`,
+  'iu',
+);
 
 /** Validates whether an assistant budget reply mentions exact ₹50/५० cap cleanly. */
 export function isGroundedBudgetReplyValid(answer: string, mode: unknown): boolean {
-  const hasCap = CURRENCY_FIFTY_RE.test(answer) || UNIT_FIFTY_RE.test(answer);
+  const hasCap = FIFTY_RE.test(answer.normalize('NFKC'));
   if (mode === 'offline_grounded') {
     return hasCap && !/µg\/day|ug\/day/i.test(answer);
   }
