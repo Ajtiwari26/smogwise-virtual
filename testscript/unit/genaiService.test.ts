@@ -391,22 +391,6 @@ describe('Grounded Q&A', () => {
     expect(keepElectricStove.answer).toContain('0 g CO2e/day');
     expect(keepElectricStove.answer).not.toContain('640');
 
-    const electricBusCommute = await askGroundedAssistant({
-      question: 'Should I switch to electric bus?',
-      profile: makeProfile({ commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'lpg' }),
-    });
-    expect(electricBusCommute.answer).toContain('3200 g CO2e/day');
-    expect(electricBusCommute.answer).not.toContain('3930');
-
-    const hiKeepInductionOnly = await askGroundedAssistant({
-      question: 'क्या मैं बस इंडक्शन रखूँ?',
-      profile: makeProfile({
-        language: 'hi', commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'induction',
-      }),
-    });
-    expect(hiKeepInductionOnly.answer).toContain('0 g CO2e');
-    expect(hiKeepInductionOnly.answer).not.toContain('3200');
-
     const hiLpgOnly = await askGroundedAssistant({
       question: 'क्या एलपीजी चुनें?',
       profile: makeProfile({
@@ -414,53 +398,115 @@ describe('Grounded Q&A', () => {
       }),
     });
     expect(hiLpgOnly.answer).not.toContain('3200 g CO2e/day');
-
-    const hyphenBus = await askGroundedAssistant({
-      question: 'Should I switch to electric-bus?',
-      profile: makeProfile({ commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'lpg' }),
-    });
-    expect(hyphenBus.answer).toContain('3200 g CO2e/day');
-    expect(hyphenBus.answer).not.toContain('3930');
-
-    const busyWordInduction = await askGroundedAssistant({
-      question: 'On a busy schedule, what if I keep induction?',
-      profile: makeProfile({ commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'induction' }),
-    });
-    expect(busyWordInduction.answer).toContain('0 g CO2e/day');
-
-    const hiHealthyJustWord = await askGroundedAssistant({
-      question: 'क्या मैं बस सेहत के लिए इंडक्शन रखूँ?',
-      profile: makeProfile({
-        language: 'hi', commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'induction',
-      }),
-    });
-    expect(hiHealthyJustWord.answer).toContain('0 g CO2e');
-
-    const hiTakeBus = await askGroundedAssistant({
-      question: 'क्या मुझे बस लेनी चाहिए?',
-      profile: makeProfile({
-        language: 'hi', commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'lpg',
-      }),
-    });
-    expect(hiTakeBus.answer).toContain('3200 g CO2e');
-    expect(hiTakeBus.answer).not.toContain('3930');
-
-    const nbHyphenBus = await askGroundedAssistant({
-      question: 'Should I switch to electric\u2011bus?',
-      profile: makeProfile({ commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'lpg' }),
-    });
-    expect(nbHyphenBus.answer).toContain('3200 g CO2e/day');
-    expect(nbHyphenBus.answer).not.toContain('3930');
-
-    for (const hiBusQ of ['क्या मैं बस पकड़ूँ?', 'क्या मैं बस ले लूँ?']) {
-      const hiBusAns = await askGroundedAssistant({
-        question: hiBusQ,
-        profile: makeProfile({
-          language: 'hi', commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'lpg',
-        }),
-      });
-      expect(hiBusAns.answer).toContain('3200 g CO2e');
-      expect(hiBusAns.answer).not.toContain('3930');
-    }
   });
+});
+
+describe('Offline what-if routing', () => {
+  // Unicode Dash_Punctuation code points plus U+2212 (minus sign).
+  const dashes = [
+    0x002d, 0x058a, 0x05be, 0x1400, 0x1806, 0x2010, 0x2011, 0x2012, 0x2013, 0x2014,
+    0x2015, 0x2212, 0x2e17, 0x2e1a, 0x2e3a, 0x2e3b, 0x2e40, 0x2e5d, 0x301c, 0x3030,
+    0x30a0, 0xfe31, 0xfe32, 0xfe58, 0xfe63, 0xff0d, 0x10d6e, 0x10ead,
+  ].map((codePoint) => String.fromCodePoint(codePoint));
+  const drivingProfile = makeProfile({
+    commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'lpg',
+  });
+
+  beforeEach(() => mockEnv(''));
+
+  it.each([
+    'electric bus',
+    ...dashes.map((dash) => `electric${dash}bus`),
+    'electric − buses',
+    'e-bus',
+    'e‑bus',
+    '<em>electric−bus</em> [CALC:SPOOF]',
+  ])('routes %s to bus without changing fuel', async (transport) => {
+    const result = await askGroundedAssistant({
+      profile: drivingProfile, question: `Should I switch to ${transport}?`,
+    });
+    expect(result.mode).toBe('offline_grounded');
+    expect(result.answer).toContain('avoids 3200 g CO2e/day');
+  });
+
+  it.each([
+    'two‑wheeler',
+    'two wheeler',
+    'two – wheeler',
+    'electric twowheeler',
+    'electric−two−wheeler',
+    ...dashes.map((dash) => `electric two ${dash} wheeler`),
+    'electric two\u00a0–\u2009wheelers',
+  ])('routes %s to two-wheeler without changing fuel', async (transport) => {
+    const result = await askGroundedAssistant({
+      profile: drivingProfile, question: `Should I switch to ${transport}?`,
+    });
+    expect(result.mode).toBe('offline_grounded');
+    expect(result.answer).toContain('avoids 2400 g CO2e/day');
+  });
+
+  it.each(['what-if', 'what‑if', 'what − if', 'what if', 'whatif'])(
+    'retains the generic comparison for %s',
+    async (phrase) => {
+      const result = await askGroundedAssistant({
+        profile: drivingProfile, question: `${phrase} I change my choices?`,
+      });
+      expect(result.mode).toBe('offline_grounded');
+      expect(result.answer).toContain('avoids 3930 g CO2e/day');
+    },
+  );
+
+  it.each([
+    'क्या मुझे बस लेनी चाहिए?',
+    'क्या मैं बस पकड़ूँ?',
+    'क्या मैं बस ले लूँ?',
+    'क्या मैं “बस” पकड़ूँ?',
+    'क्या मैं "बस" पकड़ूं?',
+    "क्या मैं 'बस' पकड़ूँ?",
+    'क्या मैं ‘बस’ पकड़ सकती हूँ?',
+    'क्या मैं **बस** पकड़ूँ?',
+    'क्या मैं (बस) पकड़ूँ?',
+    'क्या मैं बस, पकड़ूँ?',
+    'क्या मैं बस ले सकता हूँ?',
+    'क्या मैं बस ले सकती हूँ?',
+    'क्या हम बस ले सकते हैं?',
+    'क्या मैं “बस” ले सकूँगी?',
+    'क्या मैं बस ले पाऊँ?',
+    'क्या मैं बस ले पाऊंगी?',
+    'क्या हम बस ले पाएँगे?',
+    'क्या मैं बस ले पाता हूँ?',
+    'क्या मैं बस लूँ?',
+  ])('routes %s to bus without changing fuel', async (question) => {
+    const result = await askGroundedAssistant({
+      profile: { ...drivingProfile, language: 'hi' }, question,
+    });
+    expect(result.mode).toBe('offline_grounded');
+    expect(result.answer).toContain('प्रतिदिन 3200 g CO2e');
+  });
+
+  it.each([
+    { language: 'en', question: 'On a busy schedule, what if I keep induction?' },
+    { language: 'hi', question: 'क्या मैं बस इंडक्शन रखूँ?' },
+    { language: 'hi', question: 'क्या मैं बस सेहत के लिए इंडक्शन रखूँ?' },
+    { language: 'hi', question: 'क्या मैं “बस” सेहत के लिए इंडक्शन रखूँ?' },
+    { language: 'hi', question: 'क्या मैं **बस** इंडक्शन रखूँ?' },
+  ] satisfies { language: UserProfile['language']; question: string }[])(
+    'keeps induction and the current commute for $question',
+    async ({ language, question }) => {
+      const result = await askGroundedAssistant({
+        profile: { ...drivingProfile, cookingFuel: 'induction', language }, question,
+      });
+      expect(result.mode).toBe('offline_grounded');
+      expect(result.answer).toMatch(/(?:avoids|प्रतिदिन) 0 g CO2e/u);
+    },
+  );
+
+  it.each(['busy', 'बस सेहत', 'क्या बसावट बदलनी चाहिए?', 'बस सेटिंग बदलनी है।'])(
+    'does not infer a what-if comparison from %s',
+    async (question) => {
+      const result = await askGroundedAssistant({ profile: drivingProfile, question });
+      expect(result.mode).toBe('offline_grounded');
+      expect(result.answer).not.toContain('Switching choices');
+    },
+  );
 });

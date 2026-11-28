@@ -19,23 +19,30 @@ import type {
 } from '../../src/domain/types.js';
 
 const PLANTS_QUESTION_RE = /\bplants?\b|houseplant|indoor\s*plant|areca|spider\s*plant|पौध|गमल/iu;
+const DASH = '\\p{Pd}\\u2212';
+const COMPOUND_GAP = `\\s*(?:[${DASH}]\\s*)?`;
+const TWO_WHEELERS = `two${COMPOUND_GAP}wheelers?`;
 const HI_PRE = '(?<![\\p{L}\\p{M}])';
 const HI_END = '(?![\\p{L}\\p{M}])';
+const HI_BUS_SEPARATOR = `(?:\\s*[\\p{Pi}\\p{Pf}\\p{Pe}"'\`*_,${DASH}]+\\s*|\\s+)`;
+const HI_TAKE_AUX =
+  '(?:ल(?:ू[ँं]|ें|े|ो)|सक(?:[ाी]|त[ाीे]|ू[ँं](?:ग[ाीे])?|े[ँं]?(?:ग[ाीे])?)|' +
+  'पा(?:य[ाीे]|त[ाीे]|ऊ[ँं](?:ग[ाीे])?|ए[ँं]?(?:ग[ाीे])?))';
 const HI_BUS_POST =
   '(?:से|में|पर|द्वारा|वाला|वाली|वाले|यात्रा|सफर|पास|कम्यूट|स्टॉप|' +
-  'ले(?:न[ाीे]|कर|\\s+ल(?:ूँ|ूं|ें))|ल(?:ूँ|ूं|ें)|' +
+  `ले(?:न[ाीे]|कर|\\s+${HI_TAKE_AUX})|ल(?:ू[ँं]|ें)|` +
   'पकड़(?:न[ाीे]|कर|ूँ|ूं|ें)?|चढ़(?:न[ाीे]|कर|ूँ|ूं|ें)?|' +
   'चला(?:न[ाीे]|ऊँ|ऊं|एं|एँ)?|बदल(?:न[ाीे]|ूँ|ूं|ें)?|चुन(?:न[ाीे]|ूँ|ूं|ें)?)';
 const HI_BUS_TERM =
   `${HI_PRE}(?:(?:सिटी|पब्लिक|सरकारी|इलेक्ट्रिक)\\s+बस|` +
-  `मेट्रो(?:\\s*[/,]\\s*|\\s+(?:या|व|और)\\s+)बस|बस\\s+${HI_BUS_POST})${HI_END}`;
+  `मेट्रो(?:\\s*[/,]\\s*|\\s+(?:या|व|और)\\s+)बस|बस${HI_BUS_SEPARATOR}${HI_BUS_POST})${HI_END}`;
 const EV_NOUNS =
   '(?:bus(?:es)?|cars?|vehicles?|bikes?|scooters?|cycles?|autos?|' +
-  'rickshaws?|metros?|trains?|two[\\p{Pd}\\s]?wheelers?)\\b';
-const ELECTRIC_COOK_TERM = `\\belectric\\b(?![\\p{Pd}\\s]+${EV_NOUNS})`;
+  `rickshaws?|metros?|trains?|${TWO_WHEELERS})\\b`;
+const ELECTRIC_COOK_TERM = `\\belectric\\b(?![${DASH}\\s]+${EV_NOUNS})`;
 const EN_COMMUTE =
   '\\b(?:commut(?:e|ing|er)|carpool(?:ing|s)?|metro|bus(?:es)?|' +
-  'petrol|wfh|walk(?:ing|s)?|two[\\p{Pd}\\s]?wheelers?)\\b';
+  `petrol|wfh|walk(?:ing|s)?|${TWO_WHEELERS})\\b`;
 const COMMUTE_WHAT_IF_RE = new RegExp(
   `${EN_COMMUTE}|${HI_PRE}(?:आवागमन|यातायात|पैदल|मेट्रो|कारपूल)${HI_END}|${HI_BUS_TERM}`,
   'iu',
@@ -45,7 +52,7 @@ const FUEL_WHAT_IF_RE = new RegExp(
   `${ELECTRIC_COOK_TERM}|${HI_PRE}(?:ईंधन|चूल्ह[ाे]|रसोई|इंडक्शन|एलपीजी|स्टोव)${HI_END}`,
   'iu',
 );
-const GENERIC_WHAT_IF_RE = /\bwhat[\p{Pd}\s]?if\b|तुलना/iu;
+const GENERIC_WHAT_IF_RE = new RegExp(`\\bwhat${COMPOUND_GAP}if\\b|तुलना`, 'iu');
 
 /** Returns true for site-independent houseplant-vs-HEPA questions. */
 export function isPlantsQuestion(question: string): boolean {
@@ -71,7 +78,7 @@ const COMMUTE_MATCHERS: readonly { readonly value: CommuteMode; readonly re: Reg
     re: new RegExp(`\\b(?:metro|bus(?:es)?)\\b|${HI_PRE}मेट्रो${HI_END}|${HI_BUS_TERM}`, 'iu'),
   },
   { value: 'carpool', re: new RegExp(`\\bcarpool(?:ing|s)?\\b|${HI_PRE}कारपूल${HI_END}`, 'iu') },
-  { value: 'two_wheeler', re: /\btwo[\p{Pd}\s]?wheelers?\b/iu },
+  { value: 'two_wheeler', re: new RegExp(`\\b${TWO_WHEELERS}\\b`, 'iu') },
   { value: 'petrol_car', re: /\bpetrol\b/iu },
 ];
 
