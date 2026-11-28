@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EnvConfig } from '../../server/config/env.js';
 import * as envConfig from '../../server/config/env.js';
+import { readBudgetCap } from '../../server/services/genaiBudget.js';
 import { buildLocationContextTag } from '../../server/services/genaiPromptBuilders.js';
 import {
   askGroundedAssistant,
@@ -287,12 +288,26 @@ describe('Grounded Q&A', () => {
     ['What works for ₹0?', 'en', '₹0/month'],
     ['₹५० में क्या करें?', 'hi', '₹50/माह'],
     ['Can I do this with INR 1,200?', 'en', '₹1200/month'],
+    ['₹50, 120 options are listed below', 'en', '₹50/month'],
+    ['₹50, 12 options', 'en', '₹50/month'],
+    ['What can I do for ₹50 000 per month?', 'en', '₹50000/month'],
   ] as const)('honors the budget in %s without citing current exposure', async (question, language, cap) => {
     mockEnv('');
     const result = await askGroundedAssistant({ question, profile: makeProfile({ language }) });
     expect(result.answer).toContain(cap);
     expect(result.citationsUsed).toEqual([]);
     expect(result.answer).not.toMatch(/µg\/day|ug\/day/);
+  });
+
+  it.each([
+    'The monthly cap is ₹50, 500 per month.',
+    '₹50, 000',
+    '₹50 , 000',
+    '₹50, 12,345',
+    '₹50\u00a0,\u2009123',
+    '₹50, ٠٠٠',
+  ])('does not read malformed grouping in %s as a cap', (question) => {
+    expect(readBudgetCap(question)).toBeUndefined();
   });
 
   it('short-circuits unsafe prompts without contacting Gemini', async () => {
@@ -413,6 +428,17 @@ describe('Offline what-if routing', () => {
   });
 
   beforeEach(() => mockEnv(''));
+
+  it.each([
+    ['What if I ride a two-wheeler to work?', 2400],
+    ['What if I walk to work?', 3840],
+    ['Instead of taking the bus, should I walk to work?', 3840],
+    ['What if I ride a two-wheeler or walk to work?', 2400],
+  ])('selects the requested commute in %s', async (question, avoided) => {
+    const result = await askGroundedAssistant({ profile: drivingProfile, question });
+    expect(result.mode).toBe('offline_grounded');
+    expect(result.answer).toContain(`avoids ${avoided} g CO2e/day`);
+  });
 
   it.each([
     'electric bus',

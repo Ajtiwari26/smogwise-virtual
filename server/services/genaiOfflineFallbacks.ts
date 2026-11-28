@@ -119,10 +119,14 @@ function pickAlternativeOption<T>(
 ): T {
   const positive = question.replace(EXCLUSION_CLAUSE_RE, ' ');
   const destination = /\b(?:to|into)\s+([^\n]+)/iu.exec(positive)?.[1];
-  const scope = destination ?? positive;
+  if (destination !== undefined) {
+    const option = findFirstOption(destination, matchers, current, true) ??
+      findFirstOption(destination, matchers, current, false);
+    if (option !== undefined) return option;
+  }
   return (
-    findFirstOption(scope, matchers, current, true) ??
-    findFirstOption(scope, matchers, current, false) ??
+    findFirstOption(positive, matchers, current, true) ??
+    findFirstOption(positive, matchers, current, false) ??
     fallback
   );
 }

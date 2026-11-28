@@ -4,6 +4,7 @@
 
 import type { Server } from 'node:http';
 import path from 'node:path';
+import { BUDGET_NUMBER_TAIL } from '../../server/services/genaiBudget.js';
 import type { AnalyzerResult } from './types.js';
 import {
   closeServerSafely, isPlainRecord, listSourceFiles, readExcerpt,
@@ -101,10 +102,7 @@ const PERSONA_PAYLOADS: readonly PersonaSpec[] = [
   },
 ];
 
-async function probeSinglePersona(
-  baseUrl: string,
-  spec: PersonaSpec,
-): Promise<PersonaTranscript> {
+async function probeSinglePersona(baseUrl: string, spec: PersonaSpec): Promise<PersonaTranscript> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8_000);
   try {
@@ -117,12 +115,7 @@ async function probeSinglePersona(
     });
     const payload: unknown = await res.json();
     const evidence = summarizeProbe(spec, res.status, payload);
-    return {
-      id: spec.id,
-      endpoint: spec.endpoint,
-      status: res.status,
-      ...evidence,
-    };
+    return { id: spec.id, endpoint: spec.endpoint, status: res.status, ...evidence };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'probe_error';
     return { id: spec.id, endpoint: spec.endpoint, status: 0, passed: false, excerpt: msg };
@@ -133,11 +126,17 @@ async function probeSinglePersona(
 
 const D = '\\p{Nd}';
 const WB = `(?![${D}\\p{L}\\p{M}_])`;
-const MULT = `(?:(?:inr|rupees?)(?=[${D}\\p{L}\\p{M}_])|(?:thousands?|lakhs?|lacs?|millions?|billions?|trillions?|crores?|cr|bn|k|ह(?:ज\\u093C?|\\u095B)ार|लाख|करो(?:ड\\u093C?|\\u095C)|अरब|अर्ब|खरब)${WB})`;
-const NUMBER_TAIL = `\\s*(?:[.,][${D}]|,\\s*(?:[${D}]{2}\\s*,\\s*)+[${D}]{3}|,\\s*[0\\u0966\\u0660]{3}|,\\s*[${D}]{3}(?!\\s+(?!inr\\b|rupees?\\b|रुप(?:ये|ए))[\\p{L}\\p{M}]))|\\s+[${D}]{2,}`;
-const SUF = `${WB}(?!${NUMBER_TAIL}|[\\p{Pd}\\u2212\\s]+${MULT})`;
-const CURRENCY_FIFTY_RE = new RegExp(`(?:^|[^${D}\\u2212-])(?:₹|\\b(?:INR|Rs\\.?)\\b)\\s*(?:50|५०)${SUF}`, 'iu');
-const UNIT_FIFTY_RE = new RegExp(`(?:^|[^${D}.,\\u2212-])(?:50|५०)\\s*(?:INR|rupees?|रुप(?:ये|ए))${SUF}`, 'iu');
+const MULT = String.raw`(?:(?:inr|rupees?)(?=[${D}\p{L}\p{M}_])|` +
+  String.raw`(?:thousands?|lakhs?|lacs?|millions?|billions?|trillions?|crores?|cr|bn|k|` +
+  String.raw`ह(?:ज\u093C?|\u095B)ार|लाख|` +
+  String.raw`करो(?:ड\u093C?|\u095C)|अरब|अर्ब|खरब)${WB})`;
+const SUF = String.raw`${WB}(?!${BUDGET_NUMBER_TAIL}|[\p{Pd}\u2212\s]+${MULT})`;
+const UNSIGNED = String.raw`(?<![−-]\s*)`;
+const CAP = '(?:50|५०)';
+const CURRENCY_FIFTY_RE = new RegExp(
+  String.raw`(?<![${D}])${UNSIGNED}(?:₹|\b(?:INR\b|Rs\b\.?))\s*${CAP}${SUF}`, 'iu');
+const UNIT_FIFTY_RE = new RegExp(
+  String.raw`(?<![${D}.,])${UNSIGNED}${CAP}\s*(?:INR|rupees?|रुप(?:ये|ए))${SUF}`, 'iu');
 
 /** Validates whether an assistant budget reply mentions exact ₹50/५० cap cleanly. */
 export function isGroundedBudgetReplyValid(answer: string, mode: unknown): boolean {
@@ -217,9 +216,7 @@ export async function runPersonaProbes(rootDir: string): Promise<readonly Person
   try {
     const mod = await safeDynamicImport(path.join(rootDir, 'server', 'app.ts'));
     const app = resolveExpressApp(mod);
-    if (app === null) {
-      return unavailableProbes('server/app.ts unavailable');
-    }
+    if (app === null) return unavailableProbes('server/app.ts unavailable');
     const started = await startEphemeralServer(app);
     server = started.server;
     const transcripts: PersonaTranscript[] = [];
@@ -243,7 +240,8 @@ function collectDirSources(rootDir: string, dirs: readonly string[]): string {
     let remaining = Math.min(budget, quota);
     for (const file of files) {
       if (remaining < 1200) break;
-      const section = `--- ${path.relative(rootDir, file)} ---\n${readExcerpt(file, Math.min(remaining, 14_000))}`;
+      const excerpt = readExcerpt(file, Math.min(remaining, 14_000));
+      const section = `--- ${path.relative(rootDir, file)} ---\n${excerpt}`;
       sections.push(section);
       remaining -= section.length;
       budget -= section.length;
@@ -261,8 +259,10 @@ export function buildSnapshot(
   return [
     `=== README.md ===\n${readExcerpt(path.join(rootDir, 'README.md'), 6000)}`,
     `=== SYSTEM_DESIGN.md ===\n${readExcerpt(path.join(rootDir, 'SYSTEM_DESIGN.md'), 2200)}`,
-    `=== CONFIG (tsconfig / vitest) ===\n${readExcerpt(path.join(rootDir, 'tsconfig.json'), 1000)}\n${readExcerpt(path.join(rootDir, 'vitest.config.ts'), 1000)}`,
-    `=== SOURCE AND TESTS ===\n${collectDirSources(rootDir, ['src', 'server', 'api', 'testscript'])}`,
+    `=== CONFIG (tsconfig / vitest) ===\n${readExcerpt(path.join(rootDir, 'tsconfig.json'), 1000)}`
+      + `\n${readExcerpt(path.join(rootDir, 'vitest.config.ts'), 1000)}`,
+    '=== SOURCE AND TESTS ===\n' +
+      collectDirSources(rootDir, ['src', 'server', 'api', 'testscript']),
     `=== DETERMINISTIC RESULTS ===\n${JSON.stringify(deterministicResults, null, 2)}`,
     `=== LIVE PERSONA TRANSCRIPTS ===\n${JSON.stringify(transcripts, null, 2)}`,
   ].join('\n\n');

@@ -3,9 +3,24 @@
 import { IAQ_HACK_SPECS } from '../../src/domain/constants.js';
 import type { LanguageCode } from '../../src/domain/types.js';
 
-const MONEY = String.raw`([−+-]?\s*\d+(?:,\s*\d{2,3}|\s+\d{3})*(?:\.\d+)?)`;
+const DIGIT = String.raw`\p{Nd}`;
+const GROUPED_MONEY = String.raw`\d{1,3}(?:(?:,\d{2,3})+|(?: +\d{3})+)`;
+const MONEY = String.raw`([−+-]?\s*(?:${GROUPED_MONEY}|\d+)(?:\.\d+)?)`;
 const CURRENCY = String.raw`(?:₹|\bINR\b|\bRs\.?|\brupees?\b|रुपये|रुपए)`;
-const BUDGET = new RegExp(`${CURRENCY}\\s*${MONEY}|${MONEY}\\s*${CURRENCY}`, 'giu');
+
+// A three-digit count can follow a prose comma. Currency and billing units continue the amount.
+const COUNT_WORD = String.raw`(?!inr\b|rupees?\b|रुप(?:ये|ए)|per\s+month\b)[\p{L}\p{M}]`;
+const COMMA_GROUP = String.raw`(?:[${DIGIT}]{2}\s*,\s*)+[${DIGIT}]{3}|[0\u0966\u0660]{3}`;
+
+/** Numeric continuations that prevent interpreting a partial amount as the full cap. */
+export const BUDGET_NUMBER_TAIL =
+  String.raw`\s*(?:[.,][${DIGIT}]|,\s*(?:${COMMA_GROUP}|[${DIGIT}]{3}(?!\s+${COUNT_WORD})))` +
+  String.raw`|\s+[${DIGIT}]{2,}`;
+
+const BUDGET = new RegExp(
+  String.raw`${CURRENCY}\s*${MONEY}(?![${DIGIT}]|${BUDGET_NUMBER_TAIL})|${MONEY}\s*${CURRENCY}`,
+  'giu',
+);
 
 /** Returns the tightest explicitly stated currency cap, including zero and Hindi numerals. */
 export function readBudgetCap(question: string): number | undefined {
