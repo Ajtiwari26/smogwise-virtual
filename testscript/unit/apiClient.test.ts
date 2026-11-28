@@ -297,7 +297,9 @@ describe('apiClient auth and user preference endpoints', () => {
     });
     await expect(fetchSession()).resolves.toEqual({ authenticated: true, user: sampleUser });
     await expect(fetchUserPreferences()).resolves.toEqual({ profile: sampleProfile });
-    await expect(saveUserPreferences(sampleProfile)).resolves.toEqual({ profile: sampleProfile });
+    await expect(saveUserPreferences(sampleProfile, undefined, '"v0"')).resolves.toEqual({
+      profile: sampleProfile,
+    });
     await expect(logoutSession()).resolves.toEqual({ ok: true });
 
     for (const call of fetchMock.mock.calls) {
@@ -348,7 +350,8 @@ describe('apiClient auth and user preference endpoints', () => {
       .mockResolvedValueOnce(jsonResponse({ profile }))
       .mockResolvedValueOnce(jsonResponse({ profile })));
     await expect(fetchUserPreferences()).rejects.toThrow('Unexpected response shape');
-    await expect(saveUserPreferences(sampleProfile)).rejects.toThrow('Unexpected response shape');
+    await expect(saveUserPreferences(sampleProfile, undefined, '"v0"'))
+      .rejects.toThrow('Unexpected response shape');
   });
 
   it('accepts null preferences on GET and requires the saved profile on PUT', async () => {
@@ -356,7 +359,10 @@ describe('apiClient auth and user preference endpoints', () => {
       .mockResolvedValueOnce(jsonResponse({ profile: null }))
       .mockResolvedValueOnce(jsonResponse({ profile: null })));
     await expect(fetchUserPreferences()).resolves.toEqual({ profile: null });
-    await expect(saveUserPreferences(sampleProfile)).rejects.toThrow('Unexpected response shape');
+    await expect(saveUserPreferences(sampleProfile, undefined, '"v0"'))
+      .rejects.toThrow('Unexpected response shape');
+    await expect(saveUserPreferences(sampleProfile, undefined, ''))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_IF_MATCH' });
   });
 
   it('throws ApiError with status 401 on failed loginSession', async () => {
@@ -388,3 +394,20 @@ describe('apiClient auth and user preference endpoints', () => {
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('state=Madhya+Pradesh');
   });
 });
+
+it('rejects malformed successful responses using ApiError', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>Not JSON</html>')));
+  await expect(fetchSession()).rejects.toMatchObject({
+    name: 'ApiError', code: 'INVALID_JSON', status: 200,
+  });
+});
+
+it.each([{ householdSize: 2.5 }, { rwaHouseholds: 99.5 }])(
+  'rejects a fractional integer field in preferences %j',
+  async (patch) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      profile: { ...sampleProfile, ...patch },
+    })));
+    await expect(fetchUserPreferences()).rejects.toBeInstanceOf(ApiError);
+  },
+);

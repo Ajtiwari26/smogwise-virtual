@@ -21,7 +21,7 @@ import { createApiRouter } from './routes/apiRoutes.js';
 
 function handleNotFound(_req: Request, res: Response): void {
   res.setHeader('Cache-Control', 'private, no-store');
-  res.status(404).json({ error: 'Not found.' });
+  res.status(404).json({ error: 'NOT_FOUND', message: 'Not found.' });
 }
 
 /**

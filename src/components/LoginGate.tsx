@@ -3,7 +3,6 @@
  */
 
 import React, { useCallback, useState } from 'react';
-import { resolveCityPreset } from '../domain/cityPresets.js';
 import type { LanguageCode } from '../domain/types.js';
 import { ApiError, loginSession, type AuthUser } from '../services/apiClient.js';
 import { AppFooter } from './AppFooter.js';
@@ -15,6 +14,8 @@ import { CredentialFormSection } from './LoginGateForm.js';
 export interface LoginGateProps {
   readonly language: LanguageCode;
   readonly isCheckingSession: boolean;
+  readonly sessionCheckFailed?: boolean;
+  readonly onRetrySessionCheck?: () => void;
   readonly onLanguageChange: (lang: LanguageCode) => void;
   readonly onLoginSuccess: (user: AuthUser) => void;
 }
@@ -179,7 +180,32 @@ function useLoginGateState(
   };
 }
 
-const NOOP_CITY_CHANGE = (): void => undefined;
+function SessionCheckNotice({ failed, isHi, onRetry }: {
+  readonly failed: boolean;
+  readonly isHi: boolean;
+  readonly onRetry: (() => void) | undefined;
+}): React.ReactElement | null {
+  if (!failed) return null;
+  return (
+          <div className="rounded border border-amber-700 bg-amber-50 p-3">
+            <p role="alert">
+              {isHi ? 'साइन-इन सत्र की जाँच नहीं हो सकी।' : 'Could not check your sign-in session.'}
+            </p>
+            <button type="button" onClick={onRetry} className="underline">
+              {isHi ? 'फिर से जाँचें' : 'Retry session check'}
+            </button>
+          </div>
+  );
+}
+
+function getFieldErrors(gate: UseLoginGateStateResult) {
+  const invalid = gate.errorState?.kind === 'invalid_credentials';
+  const missing = gate.errorState?.kind === 'missing_fields';
+  return {
+    invalidEmail: invalid || (missing && gate.email.trim() === ''),
+    invalidPassword: invalid || (missing && gate.password === ''),
+  };
+}
 
 /** Accessible authentication gateway for SmogWise Virtual. */
 export function LoginGate({
@@ -187,20 +213,18 @@ export function LoginGate({
   isCheckingSession,
   onLanguageChange,
   onLoginSuccess,
+  sessionCheckFailed = false,
+  onRetrySessionCheck,
 }: LoginGateProps): React.ReactElement {
   const gate = useLoginGateState(onLoginSuccess);
   const isHi = language === 'hi';
-  const gateCity = resolveCityPreset('delhi_anand_vihar');
   const errorMessage = formatAuthError(gate.errorState, language);
+  const { invalidEmail, invalidPassword } = getFieldErrors(gate);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <Header
-        city={gateCity}
         language={language}
-        dataSource="city_preset"
-        isSyncing={isCheckingSession}
-        onCityChange={NOOP_CITY_CHANGE}
         onLanguageChange={onLanguageChange}
         isAuthenticated={false}
       />
@@ -210,6 +234,8 @@ export function LoginGate({
         className="mx-auto max-w-6xl space-y-5 px-4 py-6 focus:outline-none"
       >
         <GatewayStatusBanner isHi={isHi} isCheckingSession={isCheckingSession} />
+        <SessionCheckNotice
+          failed={sessionCheckFailed} isHi={isHi} onRetry={onRetrySessionCheck} />
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
           <CredentialFormSection
             isHi={isHi}
@@ -219,6 +245,8 @@ export function LoginGate({
             isSubmitting={gate.isSubmitting}
             isCheckingSession={isCheckingSession}
             errorMessage={errorMessage}
+            invalidEmail={invalidEmail}
+            invalidPassword={invalidPassword}
             onEmailChange={gate.setEmail}
             onPasswordChange={gate.setPassword}
             onToggleShowPassword={gate.handleTogglePassword}

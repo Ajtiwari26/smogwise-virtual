@@ -293,6 +293,26 @@ describe('LocationSearchCombobox geolocation handling', () => {
     vi.useRealTimers();
   });
 
+  it('invalidates pending GPS even when a preset changes to another preset', () => {
+    let finishGps: PositionCallback | undefined;
+    mockGeolocation((success) => { finishGps = success; });
+    const onSelect = vi.fn();
+    const view = (revision: number) => (
+      <LocationSearchCombobox
+        language="en" customLocation={undefined} presetSelectionRevision={revision}
+        onSelectLocation={onSelect}
+      />
+    );
+    const { rerender } = render(view(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Use My Location' }));
+    rerender(view(2));
+    act(() => {
+      finishGps?.({ coords: { latitude: 26.91, longitude: 75.79 } } as GeolocationPosition);
+    });
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Use My Location' })).toBeEnabled();
+  });
+
   it('handles in-India geolocation, out-of-India rejection, and permission denied status', () => {
     const onSelectLocation = vi.fn();
     mockGeolocation((success) => {

@@ -152,10 +152,14 @@ export interface EmissionsMetrics {
   readonly communityPm25AvoidedGramsPerMonth: number;
 }
 
+/** Live air-quality resolution state governing whether station readings apply locally. */
+export type AqResolutionStatus = 'live' | 'nearby_proxy' | 'pending' | 'unavailable';
+
 /** Deterministic Tier 1 report with stable citation keys. */
 export interface DeterministicReport {
   readonly city: CityPreset;
   readonly dataSource: 'live_open_meteo' | 'city_preset';
+  readonly aqStatus?: AqResolutionStatus;
   readonly cpcbAqi: number;
   readonly aqiBand: AqiBandId;
   readonly dominantPollutant: DominantPollutant;
@@ -166,6 +170,7 @@ export interface DeterministicReport {
   readonly fallbackDistanceKm?: number;
   readonly exposure: ExposureMetrics;
   readonly emissions: EmissionsMetrics;
+  readonly observationId?: string;
   readonly recommendedHacks: readonly IAQHackId[];
   readonly citations: Readonly<Record<string, string>>;
 }
@@ -220,4 +225,5 @@ export interface FullPlanOutput {
   readonly localizedSummary: string;
   readonly rwaNotice: string;
   readonly citations: Readonly<Record<string, string>>;
+  readonly snapshotToken?: string;
 }

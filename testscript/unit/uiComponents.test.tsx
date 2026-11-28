@@ -70,7 +70,7 @@ const SAMPLE_HACKS: readonly IAQHackDetail[] = [
     instructionsHi: 'पंखे पर 4 MERV-13 फ़िल्टर लगाएं।',
     monthlyCostInr: 450,
     doseImpactLabel: '-52% indoor PM2.5',
-    withinBudget: true,
+    withinBudget: false,
     isActive: false,
   },
 ];
@@ -379,8 +379,13 @@ describe('SmogAlertBanner', () => {
       });
       const plan = computeFullPlan(profile, { pm25 });
       vi.spyOn(apiClient, 'fetchUserPreferences').mockResolvedValue({ profile });
+      vi.spyOn(apiClient, 'readResponseEtag').mockReturnValue('"v1"');
       vi.spyOn(apiClient, 'postPlan').mockResolvedValue(plan);
-      vi.spyOn(apiClient, 'fetchAqi').mockRejectedValue(new Error('mock AQ unavailable'));
+      vi.spyOn(apiClient, 'fetchAqi').mockResolvedValue({
+        city: plan.report.city, dataSource: plan.report.dataSource, cpcbAqi: plan.report.cpcbAqi,
+        aqiBand: plan.report.aqiBand, dominantPollutant: plan.report.dominantPollutant,
+        fetchedAt: '2026-01-01T01:00:00Z', liveAq: { pm25 },
+      });
       const briefing = vi.spyOn(apiClient, 'postPlanBriefing');
       briefing.mockRejectedValue(new Error('mock briefing unavailable'));
       render(
@@ -405,12 +410,13 @@ describe('SmogAlertBanner', () => {
     },
   );
 
-  it('shows the preset source beside a distant custom location when live AQ is unavailable', async () => {
+  it('marks a distant custom location (>50 km) unavailable without displaying fake proxy readings', async () => {
     const profile = makeProfile({
       customLocation: { name: 'Udaipur', state: 'Rajasthan', lat: 24.5854, lon: 73.7125 },
     });
     const unavailable = new apiClient.ApiError('Unavailable', 503, 'LIVE_AQ_UNAVAILABLE');
     vi.spyOn(apiClient, 'fetchUserPreferences').mockResolvedValue({ profile });
+    vi.spyOn(apiClient, 'readResponseEtag').mockReturnValue('"v1"');
     vi.spyOn(apiClient, 'fetchAqiByCoords').mockRejectedValue(unavailable);
     vi.spyOn(apiClient, 'postPlan').mockRejectedValue(unavailable);
     vi.spyOn(apiClient, 'postPlanBriefing').mockRejectedValue(unavailable);
@@ -425,7 +431,16 @@ describe('SmogAlertBanner', () => {
     );
     const banner = await screen.findByRole('region', { name: 'Udaipur, Rajasthan' });
     await waitFor(() => expect(banner).toHaveTextContent('temporarily unavailable'));
-    expect(banner).toHaveTextContent(`Nearest station proxy: ${resolveCityPreset('jaipur').name}`);
+    expect(banner).toHaveTextContent(`Nearest station: ${resolveCityPreset('jaipur').name}`);
+    expect(banner).toHaveTextContent('outside 50 km fallback range');
+    expect(banner).toHaveTextContent('Local station readings unavailable');
+    expect(banner).not.toHaveTextContent('PM2.5:');
+    expect(screen.queryByRole('region', { name: 'Direct Health & Emissions Impact' }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Low-Emission Daily Routine' }))
+      .not.toBeInTheDocument();
+    expect(document.getElementById('what-if')).toBeNull();
+    expect(document.getElementById('ai-briefing-heading')).toBeNull();
   });
 
   it('renders assertive alert for Severe/GRAP_IV and classifies all lower CPCB bands', () => {
@@ -523,7 +538,7 @@ describe('SmogAlertBanner live pollutant provenance', () => {
 });
 
 describe('PersonaForm', () => {
-  it('clamps numeric fields and dispatches select, checkbox, and hack toggles', () => {
+  it('rejects invalid fields, preserves decimals, and dispatches select, checkbox, and hack toggles', () => {
     const onUpdate = vi.fn();
     const onToggleHack = vi.fn();
     render(
@@ -538,10 +553,13 @@ describe('PersonaForm', () => {
     fireEvent.change(screen.getByLabelText('Monthly Budget (₹)'), { target: { value: '-50' } });
     fireEvent.change(screen.getByLabelText('Room Volume (m³)'), { target: { value: '5' } });
     fireEvent.change(screen.getByLabelText('Commute (km/day)'), { target: { value: '400' } });
-    expect(onUpdate).toHaveBeenCalledWith({ householdSize: 12 });
-    expect(onUpdate).toHaveBeenCalledWith({ monthlyBudgetInr: 0 });
-    expect(onUpdate).toHaveBeenCalledWith({ roomVolumeM3: 12 });
-    expect(onUpdate).toHaveBeenCalledWith({ commuteDistanceKm: 150 });
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Household Size')).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.change(screen.getByLabelText('Household Size'), { target: { value: '3.5' } });
+    expect(onUpdate).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Room Volume (m³)'), { target: { value: '33.5' } });
+    expect(onUpdate).toHaveBeenCalledWith({ roomVolumeM3: 33.5 });
+    expect(screen.getByText('Over budget')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Household Persona'), {
       target: { value: 'rwa_coordinator' },
     });
@@ -796,5 +814,192 @@ describe('ScenarioPresetBar', () => {
       fireEvent.submit(form);
     }
     expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('shows AQ:SOURCE and over-budget preview wording in AiPlanBriefingCard, validates high RWA bounds, and keeps WhatIf comparator unchanged across RWA-only edits', () => {
+    const profile = makeProfile();
+    const { report } = computeFullPlan(profile);
+    render(
+      <AiPlanBriefingCard
+        report={report}
+        briefing={undefined}
+        isLoading={false}
+        language="en"
+        hasOverBudgetSelection={true}
+      />,
+    );
+    expect(screen.getByText(/total monthly cost of selected actions exceeds your budget/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/within budget/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/AQ:SOURCE/).length).toBeGreaterThanOrEqual(1);
+
+    const onHouseholdsChange = vi.fn();
+    render(
+      <RWACommunityPanel
+        households={1500}
+        adoptionRate={0.05}
+        emissions={report.emissions}
+        rwaNotice="Society notice"
+        language="en"
+        onHouseholdsChange={onHouseholdsChange}
+        onAdoptionChange={vi.fn()}
+      />,
+    );
+    const flatsSlider = screen.getByLabelText(/Households in Society/i);
+    expect(flatsSlider).toHaveAttribute('max', '5000');
+    expect(flatsSlider).toHaveAttribute('aria-valuetext', '1500');
+    expect(screen.getByLabelText(/Adoption Rate:\s*5%/i)).toHaveAttribute('aria-valuetext', '5%');
+
+    const { rerender, container } = render(
+      <WhatIfComparator profile={profile} liveAq={undefined} />,
+    );
+    const initialText = container.querySelector('#what-if')?.textContent ?? '';
+    rerender(
+      <WhatIfComparator
+        profile={{ ...profile, rwaHouseholds: 1800, rwaAdoptionRate: 0.9 }}
+        liveAq={undefined}
+      />,
+    );
+    expect(container.querySelector('#what-if')?.textContent ?? '').toBe(initialText);
+  });
+
+  it('disables Header controls during sign-out and omits dead nav links when local AQ is unavailable', () => {
+    render(
+      <Header
+        city={BASE_CITY}
+        language="en"
+        aqUnavailable={true}
+        hasLocalSections={false}
+        isSigningOut={true}
+        onCityChange={vi.fn()}
+        onLanguageChange={vi.fn()}
+        isAuthenticated={true}
+        authUser={{
+          id: 'eval_family',
+          email: 'family.eval@smogwise.in',
+          name: 'Delhi Family',
+          personaId: 'young_family',
+          defaultLang: 'en',
+          defaultCityId: 'delhi_anand_vihar',
+        }}
+        onSignOut={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText(/City/i)).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'EN' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'हिन्दी' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Sign Out/i })).toBeDisabled();
+    expect(screen.queryByRole('link', { name: 'Impact' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Routine' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'What-If' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'RWA' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Assistant' })).toBeInTheDocument();
+  });
+
+  it('keeps identical WhatIf delta at zero despite stale liveAq & forwards snapshotToken', async () => {
+    const profile = makeProfile({ commuteMode: 'petrol_car', cookingFuel: 'biomass_chulha' });
+    const liveReport = computeFullPlan(profile, { pm25: 250, observedAt: '2026-11-28T08:00' }).report;
+    const { container } = render(
+      <WhatIfComparator
+        profile={profile}
+        liveAq={{ pm25: 42, observedAt: '2026-11-28T06:00' }}
+        report={liveReport}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('Alternative Commute'), {
+      target: { value: 'petrol_car' },
+    });
+    fireEvent.change(screen.getByLabelText('Alternative Fuel'), {
+      target: { value: 'biomass_chulha' },
+    });
+    fireEvent.click(screen.getByLabelText('Add DIY Corsi-Rosenthal Box'));
+    expect(container.querySelector('#what-if')?.textContent ?? '').toContain('0 ug/day');
+
+    const askSpy = vi.spyOn(apiClient, 'postAiAsk').mockResolvedValue({
+      answer: 'Grounded reply [AQ:SOURCE]',
+      language: 'en',
+      mode: 'offline_grounded',
+      citationsUsed: ['AQ:SOURCE'],
+      guardTriggered: false,
+      report: liveReport,
+    });
+    render(
+      <GroundedAssistant
+        profile={profile}
+        observationId={liveReport.observationId}
+        snapshotToken="tok-123"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'When is the safest time to ventilate today?' }));
+    expect(askSpy).toHaveBeenCalledWith(
+      'When is the safest time to ventilate today?',
+      profile,
+      expect.any(AbortSignal),
+      'tok-123',
+    );
+  });
+
+  it('keeps in-flight budget answers across observationId settlement and syncs newer report', async () => {
+    const profile = makeProfile();
+    const freshReport = computeFullPlan(profile, { pm25: 90, observedAt: '2026-11-28T09:00' }).report;
+    let resolveAsk: ((value: apiClient.AiAskApiResponse) => void) | undefined;
+    vi.spyOn(apiClient, 'postAiAsk').mockImplementation(
+      () => new Promise((resolve) => { resolveAsk = resolve; }),
+    );
+    const onSyncReport = vi.fn();
+    const { rerender } = render(
+      <GroundedAssistant
+        profile={profile}
+        observationId={undefined}
+        onSyncReport={onSyncReport}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'How can I cut indoor PM2.5 under ₹500/month?' }));
+    rerender(
+      <GroundedAssistant
+        profile={profile}
+        observationId="initial-obs"
+        snapshotToken="tok-init"
+        onSyncReport={onSyncReport}
+      />,
+    );
+    await act(async () => resolveAsk?.({
+      answer: 'Budget under ₹500/month ready',
+      language: 'en',
+      mode: 'offline_grounded',
+      citationsUsed: [],
+      guardTriggered: false,
+      snapshotToken: 'tok-fresh',
+      report: freshReport,
+    }));
+    expect(screen.getByText('Budget under ₹500/month ready')).toBeInTheDocument();
+    expect(onSyncReport).toHaveBeenCalledWith(freshReport, 'tok-fresh', undefined);
+  });
+
+  it('forwards token-only renewal to onSyncReport even when observationId is unchanged', async () => {
+    const profile = makeProfile();
+    const sameReport = computeFullPlan(profile, { pm25: 90, observedAt: '2026-11-28T09:00' }).report;
+    const onSyncReport = vi.fn();
+    vi.spyOn(apiClient, 'postAiAsk').mockResolvedValue({
+      answer: 'Refreshed reply [AQ:SOURCE]',
+      language: 'en',
+      mode: 'offline_grounded',
+      citationsUsed: ['AQ:SOURCE'],
+      guardTriggered: false,
+      snapshotToken: 'tok-renewed',
+      report: sameReport,
+    });
+    render(
+      <GroundedAssistant
+        profile={profile}
+        observationId={sameReport.observationId}
+        snapshotToken="tok-old"
+        onSyncReport={onSyncReport}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'When is the safest time to ventilate today?' }));
+    await waitFor(() => {
+      expect(onSyncReport).toHaveBeenCalledWith(sameReport, 'tok-renewed', 'tok-old');
+    });
   });
 });

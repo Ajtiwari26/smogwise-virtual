@@ -6,9 +6,10 @@ import type { NextFunction, Request, Response } from 'express';
 import { isPlainRecord } from '../../src/domain/domainUtils.js';
 import { LANGUAGE_CODES, PERSONA_TYPES } from '../../src/domain/types.js';
 import type { PublicUser } from '../config/authAccounts.js';
-import { extractSessionToken, verifySessionToken } from '../services/authService.js';
+import { extractSessionToken, verifySessionWithId } from '../services/authService.js';
 
 const AUTH_USER_LOCAL_KEY = 'authUser';
+const AUTH_JTI_LOCAL_KEY = 'authSessionJti';
 
 function isPublicUser(value: unknown): value is PublicUser {
   if (!isPlainRecord(value)) {
@@ -30,6 +31,12 @@ export function getAuthenticatedUser(res: Response): PublicUser | undefined {
   return isPublicUser(candidate) ? candidate : undefined;
 }
 
+/** Reads the verified session jti stored on Express `res.locals`. */
+export function getAuthenticatedSessionJti(res: Response): string | undefined {
+  const candidate: unknown = res.locals[AUTH_JTI_LOCAL_KEY];
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
+}
+
 /**
  * Requires a valid signed session token and stores the verified user on `res.locals`.
  */
@@ -40,11 +47,12 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required.' });
     return;
   }
-  const user = verifySessionToken(token);
-  if (user === null) {
+  const verified = verifySessionWithId(token);
+  if (verified === null) {
     res.status(401).json({ error: 'UNAUTHORIZED', message: 'Authentication required.' });
     return;
   }
-  res.locals[AUTH_USER_LOCAL_KEY] = user;
+  res.locals[AUTH_USER_LOCAL_KEY] = verified.user;
+  res.locals[AUTH_JTI_LOCAL_KEY] = verified.jti;
   next();
 }

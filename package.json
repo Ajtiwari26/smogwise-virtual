@@ -3,15 +3,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx dev.ts",
-    "dev:server": "tsx server/index.ts",
+    "dev": "node --import tsx dev.ts",
+    "dev:server": "node --import tsx server/index.ts",
     "dev:client": "vite",
     "build": "npm run typecheck && vite build",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "evaluate": "tsx testscript/evaluator/runEvaluator.ts"
+    "evaluate": "node --import tsx testscript/evaluator/runEvaluator.ts"
   },
   "dependencies": {
     "@google/genai": "^3.5.0",

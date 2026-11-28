@@ -3,6 +3,7 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { MAX_RWA_HOUSEHOLDS } from '../domain/constants.js';
 import type { EmissionsMetrics, LanguageCode } from '../domain/types.js';
 
 /** Props for the RWACommunityPanel component. */
@@ -24,7 +25,7 @@ interface RwaRangeFieldProps {
   readonly valueText: string;
   readonly min: number;
   readonly max: number;
-  readonly step: number;
+  readonly step: number | 'any';
   readonly value: number;
   readonly hint: string;
   readonly onChange: (value: number) => void;
@@ -111,19 +112,26 @@ const RwaMetricsGrid: React.FC<{
   readonly emissions: EmissionsMetrics;
   readonly isHi: boolean;
 }> = React.memo(function RwaMetricsGrid({ emissions, isHi }) {
+  const co2 = emissions.communityCo2eAvoidedKgPerMonth;
+  const pm25 = emissions.communityPm25AvoidedGramsPerMonth;
+  const co2Label = co2 < 0
+    ? (isHi ? 'मासिक सामुदायिक CO2e अंतर' : 'Community CO2e Delta / mo')
+    : (isHi ? 'मासिक सामुदायिक CO2e बचत' : 'Community CO2e Avoided / mo');
+  const pmLabel = pm25 < 0
+    ? (isHi ? 'मासिक सामुदायिक PM2.5 अंतर' : 'Community PM2.5 Delta / mo')
+    : (isHi ? 'मासिक सामुदायिक PM2.5 बचत' : 'Community PM2.5 Avoided / mo');
+  const co2Val = co2 < 0 ? `+${String(Math.abs(co2))} kg` : `${String(co2)} kg`;
+  const pmVal = pm25 < 0 ? `+${String(Math.abs(pm25))} g` : `${String(pm25)} g`;
+
   return (
     <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
       <div className="rounded bg-teal-50 p-2.5 text-slate-900">
-        <span className="block font-semibold text-teal-900">
-          {isHi ? 'मासिक सामुदायिक CO2e बचत' : 'Community CO2e Avoided / mo'}
-        </span>
-        <strong className="text-base">{emissions.communityCo2eAvoidedKgPerMonth} kg</strong>
+        <span className="block font-semibold text-teal-900">{co2Label}</span>
+        <strong className="text-base">{co2Val}</strong>
       </div>
       <div className="rounded bg-teal-50 p-2.5 text-slate-900">
-        <span className="block font-semibold text-teal-900">
-          {isHi ? 'मासिक सामुदायिक PM2.5 बचत' : 'Community PM2.5 Avoided / mo'}
-        </span>
-        <strong className="text-base">{emissions.communityPm25AvoidedGramsPerMonth} g</strong>
+        <span className="block font-semibold text-teal-900">{pmLabel}</span>
+        <strong className="text-base">{pmVal}</strong>
       </div>
     </div>
   );
@@ -178,61 +186,59 @@ function useClipboardCopy(text: string): {
   return { copyState, handleCopy };
 }
 
+const RwaSlidersGrid: React.FC<{
+  readonly households: number;
+  readonly adoptionPct: number;
+  readonly isHi: boolean;
+  readonly onHouseholdsChange: (households: number) => void;
+  readonly onAdoptionChange: (rate: number) => void;
+}> = function RwaSlidersGrid(props) {
+  const { households, adoptionPct, isHi, onHouseholdsChange, onAdoptionChange } = props;
+  const flatsHint = isHi
+    ? `अनुमत सीमा: 1 से ${MAX_RWA_HOUSEHOLDS} परिवार`
+    : `Allowed range: 1 to ${MAX_RWA_HOUSEHOLDS} households`;
+  return (
+    <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <RwaRangeField
+        id="rwa-households" label={isHi ? 'फ्लैट / परिवारों की संख्या' : 'Households in Society'}
+        valueText={String(households)} min={1} max={MAX_RWA_HOUSEHOLDS} step={1} value={households}
+        hint={flatsHint} onChange={onHouseholdsChange}
+      />
+      <RwaRangeField
+        id="rwa-adoption" label={isHi ? 'भागीदारी दर' : 'Adoption Rate'}
+        valueText={`${String(adoptionPct)}%`} min={0} max={100} step="any" value={adoptionPct}
+        hint={isHi ? 'अनुमत सीमा: 0% से 100%' : 'Allowed range: 0% to 100%'}
+        onChange={(pct) => onAdoptionChange(pct / 100)}
+      />
+    </div>
+  );
+};
+
 /** RWA neighborhood multiplier sliders and copyable WhatsApp/Noticeboard template. */
 export const RWACommunityPanel: React.FC<RWACommunityPanelProps> = React.memo(
-  function RWACommunityPanel({
-    households,
-    adoptionRate,
-    emissions,
-    rwaNotice,
-    language,
-    onHouseholdsChange,
-    onAdoptionChange,
-  }) {
+  function RWACommunityPanel(props) {
+    const {
+      households, adoptionRate, emissions, rwaNotice, language,
+      onHouseholdsChange, onAdoptionChange,
+    } = props;
     const isHi = language === 'hi';
     const { copyState, handleCopy } = useClipboardCopy(rwaNotice);
-    const adoptionPct = Math.round(adoptionRate * 100);
+    const adoptionPct = Number((adoptionRate * 100).toPrecision(14));
 
     return (
       <section
-        id="rwa"
-        aria-labelledby="rwa-heading"
+        id="rwa" aria-labelledby="rwa-heading"
         className="rounded-lg border border-slate-300 bg-white p-4 shadow-sm"
       >
         <h2 id="rwa-heading" className="text-base font-bold text-slate-900">
           {isHi ? 'RWA और समुदाय का सामूहिक प्रभाव' : 'RWA & Neighborhood Multiplier'}
         </h2>
-        <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <RwaRangeField
-            id="rwa-households"
-            label={isHi ? 'फ्लैट / परिवारों की संख्या' : 'Households in Society'}
-            valueText={String(households)}
-            min={10}
-            max={500}
-            step={10}
-            value={households}
-            hint={isHi ? 'अनुमत सीमा: 10 से 500 परिवार' : 'Allowed range: 10 to 500 households'}
-            onChange={onHouseholdsChange}
-          />
-          <RwaRangeField
-            id="rwa-adoption"
-            label={isHi ? 'भागीदारी दर' : 'Adoption Rate'}
-            valueText={`${String(adoptionPct)}%`}
-            min={10}
-            max={100}
-            step={5}
-            value={adoptionPct}
-            hint={isHi ? 'अनुमत सीमा: 10% से 100%' : 'Allowed range: 10% to 100%'}
-            onChange={(pct) => onAdoptionChange(pct / 100)}
-          />
-        </div>
-        <RwaMetricsGrid emissions={emissions} isHi={isHi} />
-        <RwaNoticeBox
-          rwaNotice={rwaNotice}
-          isHi={isHi}
-          copyState={copyState}
-          onCopy={handleCopy}
+        <RwaSlidersGrid
+          households={households} adoptionPct={adoptionPct} isHi={isHi}
+          onHouseholdsChange={onHouseholdsChange} onAdoptionChange={onAdoptionChange}
         />
+        <RwaMetricsGrid emissions={emissions} isHi={isHi} />
+        <RwaNoticeBox rwaNotice={rwaNotice} isHi={isHi} copyState={copyState} onCopy={handleCopy} />
       </section>
     );
   },

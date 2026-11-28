@@ -27,6 +27,7 @@ import type { CookingFuel, IAQHackId, UserProfile } from './types.js';
 import { canVentilateAfternoon } from './ventilation.js';
 
 const COOKING_HOUR_SET: ReadonlySet<number> = new Set(COOKING_HOURS);
+const COOKING_EXHAUST_HOURS = new Set(COOKING_HOURS.flatMap((hour) => [hour, hour + 1, hour + 2]));
 const VENTILATION_HOUR_SET: ReadonlySet<number> = new Set(OPTIMAL_VENTILATION_HOURS);
 
 interface SeriesOptions {
@@ -114,6 +115,7 @@ function stepTransientIndoor(
   volume: number,
   deposition: number,
   cadr: number,
+  hours = 1,
 ): number {
   const steady = computeSteadyStateIndoor(
     penetration,
@@ -125,7 +127,7 @@ function stepTransientIndoor(
     cadr,
   );
   const decayRate = Math.max(0, ach) + Math.max(0, deposition) + Math.max(0, cadr) / volume;
-  const transient = steady + (prevIndoor - steady) * Math.exp(-decayRate);
+  const transient = steady + (prevIndoor - steady) * Math.exp(-decayRate * hours);
   return Number.isFinite(transient) ? Math.max(0, transient) : steady;
 }
 
@@ -137,44 +139,23 @@ function computeHourConcentration(
   eligibleHours: Set<number> | undefined,
 ): number {
   const eCook = COOKING_HOUR_SET.has(hour) ? opts.cookRate : 0;
-  let best = stepTransientIndoor(
-    prevIndoor,
-    PENETRATION_UNSEALED,
-    ACH_BASELINE,
-    cOut,
-    eCook,
-    opts.volume,
-    opts.deposition,
-    opts.cadr,
+  // Maintain kitchen exhaust during cooking and the modeled recovery period.
+  const sealed = opts.sealed && !COOKING_EXHAUST_HOURS.has(hour);
+  const penetration = sealed ? PENETRATION_SEALED : PENETRATION_UNSEALED;
+  const ach = sealed ? ACH_SEALED : ACH_BASELINE;
+  const closed = (start: number, hours: number) => stepTransientIndoor(
+    start, penetration, ach, cOut, eCook, opts.volume, opts.deposition, opts.cadr, hours,
   );
-  if (opts.sealed) {
-    const sealedVal = stepTransientIndoor(
-      prevIndoor,
-      PENETRATION_SEALED,
-      ACH_SEALED,
-      cOut,
-      eCook,
-      opts.volume,
-      opts.deposition,
-      opts.cadr,
-    );
-    best = Math.min(best, sealedVal);
-  }
-  if (VENTILATION_HOUR_SET.has(hour) && canVentilateAfternoon(cOut, Math.min(prevIndoor, best))) {
-    eligibleHours?.add(hour);
-    if (!opts.ventilated) return best;
-    return Math.min(best, stepTransientIndoor(
-      prevIndoor,
-      1,
-      ACH_VENTILATION,
-      cOut,
-      eCook,
-      opts.volume,
-      opts.deposition,
-      opts.cadr,
-    ));
-  }
-  return Math.max(0, best);
+  const closedEnd = closed(prevIndoor, 1);
+  if (!VENTILATION_HOUR_SET.has(hour)
+    || !canVentilateAfternoon(cOut, Math.min(prevIndoor, closedEnd))) return closedEnd;
+  eligibleHours?.add(hour);
+  if (!opts.ventilated) return closedEnd;
+
+  const opened = stepTransientIndoor(
+    prevIndoor, 1, ACH_VENTILATION, cOut, eCook, opts.volume, opts.deposition, opts.cadr, 0.5,
+  );
+  return Math.min(closedEnd, closed(opened, 0.5));
 }
 
 /** Computes the 24-hour winter boundary-layer diurnal outdoor PM2.5 curve (ug/m^3). */
@@ -204,15 +185,17 @@ export function simulateIndoorSeries(
     opts.deposition,
     opts.cadr,
   );
-  const series = new Array<number>(outdoorSeries.length).fill(0);
-  for (let pass = 0; pass < 2; pass += 1) {
-    const finalPassHours = pass === 1 ? eligibleHours : undefined;
-    for (let hour = 0; hour < outdoorSeries.length; hour += 1) {
-      prev = computeHourConcentration(
-        prev, clampPm25(outdoorSeries[hour] ?? 0), hour, opts, finalPassHours,
-      );
-      series[hour] = round2(prev);
-    }
+  const series = new Array<number>(outdoorSeries.length);
+  for (let hour = 0; hour < outdoorSeries.length; hour += 1) {
+    prev = computeHourConcentration(
+      prev, clampPm25(Number(outdoorSeries[hour])), hour % 24, opts, undefined,
+    );
+  }
+  for (let hour = 0; hour < outdoorSeries.length; hour += 1) {
+    prev = computeHourConcentration(
+      prev, clampPm25(Number(outdoorSeries[hour])), hour % 24, opts, eligibleHours,
+    );
+    series[hour] = round2(prev);
   }
   return series;
 }

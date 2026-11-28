@@ -3,65 +3,48 @@
  * @google/genai Interactions API with Zod parsing, caching, singleflight, and EN/HI fallback.
  */
 
-import { z } from 'zod';
 import { computeFullPlan } from '../../src/domain/impactService.js';
 import type {
   DeterministicReport,
+  FullPlanOutput,
   LanguageCode,
   LiveAqOverride,
   UserProfile,
 } from '../../src/domain/types.js';
 import { createLruCache, createSingleflight, hashCacheKey } from '../cache/lruCache.js';
 import { getEnvConfig } from '../config/env.js';
+import { inspectAndSanitizePrompt, scrubSecretsFromOutput } from '../middleware/promptGuard.js';
+import { queryGeminiWithFallback } from './genaiClient.js';
 import {
-  inspectAndSanitizePrompt,
-  scrubSecretsFromOutput,
-  stripDisallowedCitationTags,
-} from '../middleware/promptGuard.js';
-import {
-  extractJsonPayloadText,
-  type InteractionResponseFormat,
-  queryGeminiWithFallback,
-} from './genaiClient.js';
+  ANSWER_RESPONSE_FORMAT,
+  BRIEFING_RESPONSE_FORMAT,
+  buildOfflineBriefingResponse,
+  cleanGroundedAnswer,
+  parseBriefingPayload,
+  type PlanBriefingResponse,
+} from './genaiPayloadParser.js';
 import {
   buildBriefingSystemInstruction,
   buildBriefingUserPrompt,
   buildGuardRefusal,
   buildOfflineAnswer,
-  buildOfflineBriefing,
   buildSystemInstruction,
   buildUserPrompt,
   extractCitations,
-  SYNCED_CITATION_KEYS,
 } from './genaiPromptBuilders.js';
+import { buildBriefingActions } from './genaiOfflineFallbacks.js';
+import { buildGroundedClaims, type GroundedClaims } from './genaiVerifier.js';
+import { formatBudgetOptions, isBudgetQuestion, readBudgetCap } from './genaiBudget.js';
+import { ASSISTANT_TOOLS, executeAssistantToolCall } from './genaiTools.js';
 
 const BRIEFING_CACHE_TTL_MS = 10 * 60 * 1000;
-
-const BriefingJsonSchema = z.object({
-  headline: z.string().trim().min(4).max(160),
-  summary: z.string().trim().min(10).max(500),
-  whyActions: z.array(z.string().trim().min(6).max(260)).min(1).max(4),
-});
-
-const BRIEFING_RESPONSE_FORMAT: InteractionResponseFormat = {
-  type: 'text',
-  mime_type: 'application/json',
-  schema: {
-    type: 'object',
-    required: ['headline', 'summary', 'whyActions'],
-    properties: {
-      headline: { type: 'string' },
-      summary: { type: 'string' },
-      whyActions: { type: 'array', items: { type: 'string' } },
-    },
-  },
-};
 
 /** Input parameters for the grounded SmogWise AI assistant. */
 interface AskAssistantInput {
   readonly question: string;
   readonly profile: UserProfile;
   readonly liveAq?: LiveAqOverride;
+  readonly plan?: FullPlanOutput;
 }
 
 /** Structured response returned by the grounded SmogWise AI assistant. */
@@ -71,17 +54,8 @@ interface AskAssistantResponse {
   readonly mode: 'gemini_interactions' | 'offline_grounded' | 'guard_refusal';
   readonly citationsUsed: readonly string[];
   readonly guardTriggered: boolean;
+  readonly modelUsed?: string;
   readonly report: DeterministicReport;
-}
-
-/** Structured response returned by POST /api/plan/briefing. */
-interface PlanBriefingResponse {
-  readonly headline: string;
-  readonly summary: string;
-  readonly whyActions: readonly string[];
-  readonly language: LanguageCode;
-  readonly mode: 'gemini_interactions' | 'offline_grounded';
-  readonly citationsUsed: readonly string[];
 }
 
 const briefingCache = createLruCache<PlanBriefingResponse>(100, BRIEFING_CACHE_TTL_MS);
@@ -93,77 +67,37 @@ export function clearBriefingCache(): void {
   briefingSingleflight.clear();
 }
 
-function groundCitationText(cleaned: string, allowedKeys: ReadonlySet<string>): string {
-  const used = extractCitations(cleaned, allowedKeys);
-  const hasCalc = used.some((key) => key.startsWith('CALC:'));
-  const hasAq = used.some((key) => key.startsWith('AQ:'));
-  if (hasCalc && hasAq) return cleaned;
-  const suffix = [!hasCalc ? '[CALC:DOSE_AFTER]' : '', !hasAq ? '[AQ:SOURCE]' : '']
-    .filter(Boolean)
-    .join(' ');
-  return `${cleaned} ${suffix}`.trim();
+function compactReportForAssistant(report: DeterministicReport): DeterministicReport {
+  const { hourlySeries: _omitted, ...compactExposure } = report.exposure;
+  void _omitted;
+  return { ...report, exposure: compactExposure };
 }
 
-function cleanGroundedAnswer(raw: string, allowedKeys: ReadonlySet<string>): string | undefined {
-  const cleaned = stripDisallowedCitationTags(scrubSecretsFromOutput(raw), allowedKeys);
-  const prose = stripDisallowedCitationTags(cleaned);
-  return /[\p{L}\p{N}]/u.test(prose) ? groundCitationText(cleaned, allowedKeys) : undefined;
-}
-
-function parseBriefingPayload(
-  rawText: string,
-  language: LanguageCode,
-  allowedKeys: ReadonlySet<string>,
-): PlanBriefingResponse | null {
-  try {
-    const parsedJson: unknown = JSON.parse(extractJsonPayloadText(rawText));
-    const parsed = BriefingJsonSchema.safeParse(parsedJson);
-    if (!parsed.success) return null;
-    const cleanLine = (val: string): string =>
-      stripDisallowedCitationTags(scrubSecretsFromOutput(val), allowedKeys);
-    const headline = cleanLine(parsed.data.headline);
-    const cleanSummary = cleanLine(parsed.data.summary);
-    const whyActions = parsed.data.whyActions.map(cleanLine);
-    const prose = BriefingJsonSchema.safeParse({
-      headline: stripDisallowedCitationTags(headline),
-      summary: stripDisallowedCitationTags(cleanSummary),
-      whyActions: whyActions.map((line) => stripDisallowedCitationTags(line)),
-    });
-    if (!prose.success) return null;
-    const summary = groundCitationText(cleanSummary, allowedKeys);
-    const combined = [headline, summary, ...whyActions].join(' ');
-    return {
-      headline,
-      summary,
-      whyActions,
-      language,
-      mode: 'gemini_interactions',
-      citationsUsed: extractCitations(combined, allowedKeys),
-    };
-  } catch (err: unknown) {
-    void err;
-    return null;
-  }
-}
-
-function buildOfflineBriefingResponse(
-  profile: UserProfile,
-  report: DeterministicReport,
-  allowedKeys: ReadonlySet<string>,
-): PlanBriefingResponse {
-  const offline = buildOfflineBriefing(profile, report);
-  const summary = scrubSecretsFromOutput(offline.summary);
-  const whyActions = offline.whyActions.map((line) => scrubSecretsFromOutput(line));
-  const headline = scrubSecretsFromOutput(offline.headline);
-  const combined = [headline, summary, ...whyActions].join(' ');
-  return {
-    headline,
-    summary,
-    whyActions,
+function buildBriefingCacheKey(profile: UserProfile, report: DeterministicReport): string {
+  return hashCacheKey({
     language: profile.language,
-    mode: 'offline_grounded',
-    citationsUsed: extractCitations(combined, allowedKeys),
-  };
+    cityId: report.city.id,
+    cityName: report.city.name,
+    cityNameHi: report.city.nameHi,
+    dataSource: report.dataSource,
+    aqStatus: report.aqStatus,
+    observationId: report.observationId,
+    cpcbAqi: report.cpcbAqi,
+    baselinePm25: report.city.baselinePm25,
+    budget: profile.monthlyBudgetInr,
+    householdSize: profile.householdSize,
+    roomVolumeM3: profile.roomVolumeM3,
+    commuteMode: profile.commuteMode,
+    commuteDistanceKm: profile.commuteDistanceKm,
+    cookingFuel: profile.cookingFuel,
+    hasVulnerableMember: profile.hasVulnerableMember,
+    hacks: [...profile.activeHacks].sort(),
+    customLocation: profile.customLocation,
+    doseAfter: report.exposure.optimizedInhaledUgPerDay,
+    indoorAfter: report.exposure.optimizedIndoorPm25,
+    co2eSaved: report.emissions.co2eAvoidedGramsPerDay,
+    observedAt: report.observedAt ?? '',
+  });
 }
 
 /** Synthesizes a grounded EN/HI household briefing with singleflight, LRU cache & fallback. */
@@ -171,39 +105,81 @@ export async function generatePlanBriefing(
   profile: UserProfile,
   report: DeterministicReport,
 ): Promise<PlanBriefingResponse> {
-  const userPrompt = buildBriefingUserPrompt(profile, report);
-  const cacheKey = hashCacheKey({
-    language: profile.language,
-    cityNameHi: report.city.nameHi,
-    userPrompt,
-  });
+  const cacheKey = buildBriefingCacheKey(profile, report);
   const cached = briefingCache.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  return briefingSingleflight.run(cacheKey, async () => {
-    const allowedKeys = new Set([...SYNCED_CITATION_KEYS, ...Object.keys(report.citations)]);
+  if (cached !== undefined) return cached;
+  const fallback = () => buildOfflineBriefingResponse(profile, report);
+  return briefingSingleflight.run(cacheKey, async (isCurrent) => {
     const { geminiApiKey } = getEnvConfig();
-    if (geminiApiKey.length > 0) {
-      const sys = buildBriefingSystemInstruction(profile.language);
-      const raw = await queryGeminiWithFallback(
-        geminiApiKey,
-        sys,
-        userPrompt,
-        BRIEFING_RESPONSE_FORMAT,
-      );
-      if (raw !== null) {
-        const parsed = parseBriefingPayload(raw, profile.language, allowedKeys);
-        if (parsed !== null) {
-          briefingCache.set(cacheKey, parsed, BRIEFING_CACHE_TTL_MS);
-          return parsed;
-        }
-      }
-    }
-    const fallback = buildOfflineBriefingResponse(profile, report, allowedKeys);
-    briefingCache.set(cacheKey, fallback, BRIEFING_CACHE_TTL_MS);
-    return fallback;
+    if (geminiApiKey.length === 0 || report.aqStatus === 'unavailable') return fallback();
+    const parsed = await requestBriefing(geminiApiKey, profile, report);
+    if (parsed === null) return fallback();
+    if (isCurrent()) briefingCache.set(cacheKey, parsed);
+    return parsed;
+  }, fallback);
+}
+
+async function requestBriefing(
+  apiKey: string, profile: UserProfile, report: DeterministicReport,
+): Promise<PlanBriefingResponse | null> {
+  const claims = buildGroundedClaims(profile, report);
+  const actions = buildBriefingActions(profile, report);
+  const prompt = buildBriefingUserPrompt(profile, report, claims, actions);
+  const sys = buildBriefingSystemInstruction(profile.language);
+  const parse = (text: string, model?: string) =>
+    parseBriefingPayload(text, profile, report, claims, actions, model);
+  const result = await queryGeminiWithFallback(apiKey, sys, prompt, {
+    responseFormat: BRIEFING_RESPONSE_FORMAT,
+    validateResponse: (text) => parse(text) !== null,
   });
+  return result === null ? null : parse(result.text, result.modelUsed);
+}
+
+function answerClaims(question: string, profile: UserProfile, report: DeterministicReport) {
+  if (!isBudgetQuestion(question)) return buildGroundedClaims(profile, report);
+  const cap = readBudgetCap(question) ?? profile.monthlyBudgetInr;
+  return new Map([['BUDGET_OPTIONS', formatBudgetOptions(cap, profile.language)]]);
+}
+
+function mergeClaims(base: GroundedClaims, tools: GroundedClaims): GroundedClaims {
+  return new Map([...base, ...tools]);
+}
+
+async function runOnlineAssistant(
+  question: string,
+  input: AskAssistantInput,
+  plan: FullPlanOutput,
+): Promise<AskAssistantResponse | null> {
+  const { geminiApiKey } = getEnvConfig();
+  if (geminiApiKey.length === 0 || plan.report.aqStatus === 'unavailable') return null;
+  const sys = buildSystemInstruction(input.profile.language);
+  const claims = answerClaims(question, input.profile, plan.report);
+  const prompt = buildUserPrompt(question, input.profile, plan, claims);
+  const budgetOnly = isBudgetQuestion(question);
+  const render = (raw: string, toolClaims: GroundedClaims) =>
+    cleanGroundedAnswer(raw, mergeClaims(claims, toolClaims));
+  const result = await queryGeminiWithFallback(geminiApiKey, sys, prompt, {
+    responseFormat: ANSWER_RESPONSE_FORMAT,
+    tools: budgetOnly ? ASSISTANT_TOOLS.slice(0, 1) : ASSISTANT_TOOLS,
+    executeTools: (calls) => calls.map((call) => executeAssistantToolCall(call, {
+      budgetOnly,
+      profile: input.profile, report: plan.report, question,
+      ...(input.liveAq !== undefined ? { liveAq: input.liveAq } : {}),
+    })),
+    validateResponse: (raw, toolClaims) => render(raw, toolClaims) !== undefined,
+  });
+  if (result === null) return null;
+  const answer = render(result.text, result.toolClaims);
+  if (answer === undefined) return null;
+  return {
+    answer,
+    language: input.profile.language,
+    mode: 'gemini_interactions',
+    citationsUsed: extractCitations(answer),
+    guardTriggered: false,
+    ...(result.modelUsed !== undefined ? { modelUsed: result.modelUsed } : {}),
+    report: compactReportForAssistant(plan.report),
+  };
 }
 
 /** Computes Tier 1 deterministic plan and synthesizes a grounded bilingual Q&A answer. */
@@ -211,44 +187,31 @@ export async function askGroundedAssistant(
   input: AskAssistantInput,
 ): Promise<AskAssistantResponse> {
   const inspection = inspectAndSanitizePrompt(input.question);
-  const plan = computeFullPlan(input.profile, input.liveAq);
+  const plan = input.plan ?? computeFullPlan(input.profile, input.liveAq);
   const { language } = input.profile;
-  const allowedKeys = new Set([...SYNCED_CITATION_KEYS, ...Object.keys(plan.report.citations)]);
+  const compactReport = compactReportForAssistant(plan.report);
   if (inspection.guardTriggered) {
     const refusal = scrubSecretsFromOutput(buildGuardRefusal(plan, language));
     return {
       answer: refusal,
       language,
       mode: 'guard_refusal',
-      citationsUsed: extractCitations(refusal, allowedKeys),
+      citationsUsed: extractCitations(refusal),
       guardTriggered: true,
-      report: plan.report,
+      report: compactReport,
     };
   }
-  const { geminiApiKey } = getEnvConfig();
-  if (geminiApiKey.length > 0) {
-    const sys = buildSystemInstruction(language);
-    const prompt = buildUserPrompt(inspection.sanitizedText, input.profile, plan);
-    const raw = await queryGeminiWithFallback(geminiApiKey, sys, prompt);
-    const safeText = raw === null ? undefined : cleanGroundedAnswer(raw, allowedKeys);
-    if (safeText !== undefined) {
-      return {
-        answer: safeText,
-        language,
-        mode: 'gemini_interactions',
-        citationsUsed: extractCitations(safeText, allowedKeys),
-        guardTriggered: false,
-        report: plan.report,
-      };
-    }
-  }
-  const offline = scrubSecretsFromOutput(buildOfflineAnswer(plan, language));
+  const online = await runOnlineAssistant(inspection.sanitizedText, input, plan);
+  if (online !== null) return online;
+  const offline = scrubSecretsFromOutput(
+    buildOfflineAnswer(plan, input.profile, inspection.sanitizedText),
+  );
   return {
     answer: offline,
     language,
     mode: 'offline_grounded',
-    citationsUsed: extractCitations(offline, allowedKeys),
+    citationsUsed: extractCitations(offline),
     guardTriggered: false,
-    report: plan.report,
+    report: compactReport,
   };
 }

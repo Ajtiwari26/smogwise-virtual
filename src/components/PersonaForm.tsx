@@ -22,6 +22,7 @@ import { ScenarioPresetBar } from './ScenarioPresetBar.js';
 /** Props for the household PersonaForm component. */
 export interface PersonaFormProps {
   readonly profile: UserProfile;
+  readonly presetSelectionRevision?: number;
   readonly iaqHacks: readonly IAQHackDetail[];
   readonly onUpdate: (patch: Partial<UserProfile>) => void;
   readonly onToggleHack: (hackId: IAQHackId) => void;
@@ -158,6 +159,7 @@ export const PersonaForm: React.FC<PersonaFormProps> = React.memo(function Perso
         <LocationSectionFields
           profile={profile}
           isHi={isHi}
+          presetSelectionRevision={props.presetSelectionRevision ?? profile.cityId}
           onSelectLocation={handlers.handleLocationSelect}
           onSelectPresetCity={handlers.handlePresetCitySelect}
         />

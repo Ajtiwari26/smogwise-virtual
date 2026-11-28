@@ -1,3 +1,5 @@
+import { clearSessionRevocations, isSessionRevoked, rememberRevocation }
+  from '../../server/services/sessionRevocation.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   findAccountByEmail,
@@ -221,4 +223,20 @@ describe('preferencesStore isolation', () => {
     expect(getUserPreferences('')).toBeUndefined();
     expect(getUserPreferences('   ')).toBeUndefined();
   });
+});
+
+it('prunes expired revocations and fails closed when all entries remain live', () => {
+  clearSessionRevocations();
+  try {
+    for (let i = 0; i < 1000; i++) rememberRevocation(`old-${i}`, 10, 1);
+    rememberRevocation('new', 100, 11);
+    expect(isSessionRevoked('old-0', 1, 11)).toBe(false);
+    expect(isSessionRevoked('new', 11, 11)).toBe(true);
+    for (let i = 0; i < 1000; i++) rememberRevocation(`live-${i}`, 100, 12);
+    expect(isSessionRevoked('live-0', 12, 12)).toBe(true);
+    expect(isSessionRevoked('new', 11, 12)).toBe(true);
+    expect(isSessionRevoked('future', 13, 13)).toBe(false);
+  } finally {
+    clearSessionRevocations();
+  }
 });

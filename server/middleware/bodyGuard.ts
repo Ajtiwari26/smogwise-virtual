@@ -62,11 +62,13 @@ export const rejectPrototypePollutionAndDepth: RequestHandler = (req, res, next)
   }
   const violation = inspectValue(body, 1);
   if (violation === 'depth') {
-    res.status(400).json({ error: 'JSON payload exceeds maximum nesting depth.' });
+    res.status(413).json({
+      error: 'PAYLOAD_TOO_LARGE', message: 'JSON payload exceeds maximum nesting depth.',
+    });
     return;
   }
   if (violation === 'forbidden_key') {
-    res.status(400).json({ error: 'Invalid property name in JSON payload.' });
+    res.status(400).json({ error: 'INVALID_JSON', message: 'Invalid property name in JSON payload.' });
     return;
   }
   next();

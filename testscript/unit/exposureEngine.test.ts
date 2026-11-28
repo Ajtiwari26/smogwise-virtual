@@ -174,4 +174,25 @@ describe('exposureEngine intervention deltas & edge cases', () => {
     expect(isPlainRecord([1, 2])).toBe(false);
     expect(isPlainRecord(null)).toBe(false);
   });
+
+  it('models afternoon ventilation as 0.5h open followed by 0.5h closed recovery', () => {
+    const profile = makeProfile({
+      cookingFuel: 'biomass_chulha', roomVolumeM3: 12, activeHacks: ['ventilation_window'],
+    });
+    const closedOnly = computeIndoorSeries(
+      Array.from({ length: 24 }, () => 0),
+      makeProfile({ cookingFuel: 'biomass_chulha', roomVolumeM3: 12, activeHacks: [] }),
+      true,
+    );
+    const series = computeIndoorSeries(Array.from({ length: 24 }, () => 0), profile, true);
+    const h12 = series[12] ?? 0;
+    const h13 = series[13] ?? 0;
+    const closed13 = closedOnly[13] ?? 0;
+    expect(h12).toBeGreaterThan(0);
+    expect(h13).toBeGreaterThan(0);
+    // Open 0.5h washout drops PM2.5 strictly below pure closed-only decay at hour 13
+    expect(h13).toBeLessThan(closed13);
+    // Half-hour recovery keeps more PM2.5 than full 1h open washout
+    expect(h13).toBeGreaterThan(h12 * Math.exp(-3.8));
+  });
 });

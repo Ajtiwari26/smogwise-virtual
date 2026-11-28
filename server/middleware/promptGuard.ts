@@ -1,3 +1,4 @@
+import { stripCitationTags } from './textSanitizer.js';
 /**
  * Prompt-injection/XSS/SQLi detector, XML wrapper, and output secret scrubber.
  */
@@ -111,8 +112,6 @@ function hasBase64Override(text: string): boolean {
   return false;
 }
 
-const CITATION_TAG_RE = /\[\s*(?:CALC|AQ|SCI)\s*:[^\]]*\]/gi;
-
 function stripAngleTagNoise(input: string): string {
   return input.replace(/<[^<>]*>/g, ' ');
 }
@@ -122,8 +121,7 @@ export function stripDisallowedCitationTags(
   text: string,
   allowedKeys?: ReadonlySet<string>,
 ): string {
-  return text
-    .replace(CITATION_TAG_RE, (tag) => (allowedKeys?.has(tag.slice(1, -1)) ? tag : ' '))
+  return stripCitationTags(text, allowedKeys)
     .replace(/ {2,}/g, ' ')
     .trim();
 }

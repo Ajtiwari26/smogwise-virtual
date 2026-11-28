@@ -2,6 +2,7 @@
 import '@testing-library/jest-dom/vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolveReportAq } from '../../src/domain/liveAqResolver.js';
 import { resolveCityPreset } from '../../src/domain/cityPresets.js';
 import type {
   LiveAqOverride,
@@ -40,7 +41,7 @@ const mockedPostPlanBriefing = vi.mocked(apiClient.postPlanBriefing);
 const mockLiveAq: LiveAqOverride = {
   pm25: 185,
   pm10: 310,
-  cpcbAqi: 348,
+  cpcbAqi: 351,
   dominantPollutant: 'PM2.5',
   sourceLabel: 'live_open_meteo',
   observedAt: '2026-11-25T15:00:00Z',
@@ -49,7 +50,7 @@ const mockLiveAq: LiveAqOverride = {
 const mockAqiResponse: AqiApiResponse = {
   city: resolveCityPreset('delhi_anand_vihar'),
   dataSource: 'live_open_meteo',
-  cpcbAqi: 348,
+  cpcbAqi: 351,
   aqiBand: 'very_poor',
   dominantPollutant: 'PM2.5',
   fetchedAt: '2026-11-25T15:00:00Z',
@@ -64,6 +65,8 @@ const mockBriefingResponse: PlanBriefingApiResponse = {
   language: 'en',
   mode: 'gemini_interactions',
   citationsUsed: ['CALC:DOSE_AFTER'],
+  observationId: resolveReportAq(DEFAULT_PROFILE, mockLiveAq).observationId,
+  aqStatus: 'live',
 };
 
 function setupDefaultMocks(): void {
@@ -167,7 +170,7 @@ describe('useSmogPlan location selection and preset switching', () => {
   beforeEach(setupDefaultMocks);
   afterEach(cleanupTestState);
 
-  it('sets customLocation and triggers fetchAqiByCoords on selectLocation', async () => {
+  it('sets customLocation and triggers postPlan without redundant fetchAqiByCoords', async () => {
     vi.useFakeTimers();
     const { result } = renderHook(() => useSmogPlan());
 
@@ -194,13 +197,19 @@ describe('useSmogPlan location selection and preset switching', () => {
       await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
     });
 
-    expect(mockedFetchAqiByCoords).toHaveBeenCalledWith(
-      23.2156,
-      77.4305,
-      'Arera Colony',
-      'Madhya Pradesh',
+    expect(mockedPostPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customLocation: {
+          name: 'Arera Colony',
+          state: 'Madhya Pradesh',
+          lat: 23.2156,
+          lon: 77.4305,
+        },
+      }),
       expect.any(AbortSignal),
+      undefined,
     );
+    expect(mockedFetchAqiByCoords).not.toHaveBeenCalled();
   });
 
   it('clears customLocation and updates cityId on selectPresetCity', async () => {
@@ -234,7 +243,12 @@ describe('useSmogPlan location selection and preset switching', () => {
       await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
     });
 
-    expect(mockedFetchAqi).toHaveBeenCalledWith('mumbai_bandra', expect.any(AbortSignal));
+    expect(mockedPostPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ cityId: 'mumbai_bandra' }),
+      expect.any(AbortSignal),
+      undefined,
+    );
+    expect(mockedFetchAqi).not.toHaveBeenCalled();
   });
 });
 
@@ -321,7 +335,9 @@ describe('useSmogPlan error states', () => {
     expect(report.city.name).toBe('Udaipur, Rajasthan');
     expect(report.city.baselinePm25).toBe(jaipur.baselinePm25);
     expect(report.fallbackStationName).toBe(jaipur.name);
-    expect(report.citations['AQ:SOURCE']).toContain(`Nearest station proxy: ${jaipur.name}`);
+    expect(report.aqStatus).toBe('unavailable');
+    expect(report.citations['AQ:SOURCE']).toContain('Live AQ unavailable');
+    expect(report.citations['AQ:SOURCE']).toContain(jaipur.name);
   });
 
   it('surfaces localized 503 LIVE_AQ_UNAVAILABLE error banner in both en and hi', async () => {
@@ -386,4 +402,144 @@ describe('useSmogPlan error states', () => {
     });
     expect(result.current.isSyncing).toBe(false);
   });
+
+  it('scales community emissions and rwaNotice on RWA slider edits without firing /api/plan or /api/plan/briefing', async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useSmogPlan());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(Math.max(DEBOUNCE_MS, BRIEFING_DEBOUNCE_MS) + 20);
+    });
+
+    const planCallsBefore = mockedPostPlan.mock.calls.length;
+    const briefingCallsBefore = mockedPostPlanBriefing.mock.calls.length;
+    const initialCo2e = result.current.plan.report.emissions.communityCo2eAvoidedKgPerMonth;
+
+    act(() => {
+      result.current.updateRwaHouseholds(600);
+      result.current.updateRwaAdoptionRate(0.75);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS + 50);
+    });
+
+    expect(mockedPostPlan.mock.calls.length).toBe(planCallsBefore);
+    expect(mockedPostPlanBriefing.mock.calls.length).toBe(briefingCallsBefore);
+    expect(result.current.plan.report.emissions.communityCo2eAvoidedKgPerMonth).toBeGreaterThan(
+      initialCo2e,
+    );
+    expect(result.current.plan.rwaNotice).toContain('600');
+    expect(result.current.plan.rwaNotice).toContain('75%');
+  });
+});
+
+it('rejects a briefing from a different observation even for the same profile', async () => {
+  setupDefaultMocks();
+  vi.useFakeTimers();
+  try {
+    mockedPostPlanBriefing.mockResolvedValue({ ...mockBriefingResponse, observationId: 'stale' });
+    const { result } = renderHook(() => useSmogPlan());
+    await act(async () => { await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS); });
+    expect(result.current.briefing).toBeUndefined();
+    expect(result.current.briefingFailed).toBe(true);
+    expect(result.current.plan.report.observationId).toBe(mockBriefingResponse.observationId);
+  } finally {
+    cleanupTestState();
+  }
+});
+
+it('carries authoritative snapshotToken from /api/plan into /api/plan/briefing and liveAq', async () => {
+  setupDefaultMocks();
+  vi.useFakeTimers();
+  try {
+    const fresherLiveAq: LiveAqOverride = {
+      ...mockLiveAq, pm25: 250, observedAt: '2026-11-25T16:00:00Z',
+    };
+    const fresherId = resolveReportAq(DEFAULT_PROFILE, fresherLiveAq).observationId;
+    mockedPostPlan.mockImplementation(async (profile) => {
+      const { computeFullPlan } = await import('../../src/domain/impactService.js');
+      return { ...computeFullPlan(profile, fresherLiveAq), snapshotToken: 'signed-snap-token' };
+    });
+    mockedPostPlanBriefing.mockResolvedValue({ ...mockBriefingResponse, observationId: fresherId });
+
+    const { result } = renderHook(() => useSmogPlan());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(Math.max(DEBOUNCE_MS, BRIEFING_DEBOUNCE_MS) + 20);
+    });
+
+    expect(result.current.plan.report.observationId).toBe(fresherId);
+    expect(result.current.liveAq?.pm25).toBe(250);
+    expect(result.current.snapshotToken).toBe('signed-snap-token');
+    expect(mockedPostPlanBriefing).toHaveBeenCalledWith(
+      expect.objectContaining({ cityId: DEFAULT_PROFILE.cityId }),
+      expect.any(AbortSignal),
+      'signed-snap-token',
+    );
+    expect(result.current.briefing?.observationId).toBe(fresherId);
+    expect(result.current.briefingFailed).toBe(false);
+  } finally {
+    cleanupTestState();
+  }
+});
+
+it('preserves settled live AQ on transient non-503 plan failure after budget edit', async () => {
+  setupDefaultMocks();
+  vi.useFakeTimers();
+  try {
+    const { result } = renderHook(() => useSmogPlan());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    });
+    expect(result.current.liveAq?.pm25).toBe(185);
+    expect(result.current.plan.report.city.baselinePm25).toBe(185);
+
+    mockedPostPlan.mockRejectedValueOnce(new Error('network blip'));
+    act(() => {
+      result.current.updateProfile({ monthlyBudgetInr: 4000 });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+    });
+
+    expect(result.current.liveAq?.pm25).toBe(185);
+    expect(result.current.plan.report.city.baselinePm25).toBe(185);
+    expect(result.current.aqiError).toContain('showing your last valid plan');
+  } finally {
+    cleanupTestState();
+  }
+});
+
+it('rejects stale out-of-order external rollbacks and accepts token-only renewals', async () => {
+  setupDefaultMocks();
+  vi.useFakeTimers();
+  try {
+    const { computeFullPlan } = await import('../../src/domain/impactService.js');
+    const oldReport = computeFullPlan(DEFAULT_PROFILE, {
+      pm25: 42, observedAt: '2026-11-28T06:00:00Z',
+    }).report;
+    const freshLiveAq: LiveAqOverride = { pm25: 90, observedAt: '2026-11-28T09:00:00Z' };
+    const freshReport = computeFullPlan(DEFAULT_PROFILE, freshLiveAq).report;
+    mockedPostPlan.mockResolvedValue({
+      ...computeFullPlan(DEFAULT_PROFILE, freshLiveAq),
+      snapshotToken: 'tok-fresh',
+    });
+
+    const { result } = renderHook(() => useSmogPlan());
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); });
+    expect(result.current.liveAq?.pm25).toBe(90);
+    expect(result.current.snapshotToken).toBe('tok-fresh');
+
+    act(() => {
+      result.current.syncExternalReport(oldReport, 'tok-old', 'tok-old');
+    });
+    expect(result.current.liveAq?.pm25).toBe(90);
+    expect(result.current.snapshotToken).toBe('tok-fresh');
+
+    act(() => {
+      result.current.syncExternalReport(freshReport, 'tok-renewed', 'tok-fresh');
+    });
+    expect(result.current.snapshotToken).toBe('tok-renewed');
+  } finally {
+    cleanupTestState();
+  }
 });

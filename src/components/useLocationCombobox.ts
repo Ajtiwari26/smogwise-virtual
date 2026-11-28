@@ -3,14 +3,16 @@
  */
 
 import type { Dispatch, KeyboardEvent, MutableRefObject, RefObject, SetStateAction } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CustomLocation, LocationSearchItem } from '../domain/types.js';
-import { searchLocations } from '../services/apiClient.js';
 import {
   computeNextKeyState,
+  extractCitySearchTerm,
   formatDisplayLocation,
   INITIAL_SEARCH_STATE,
+  runDebouncedQuery,
   useGeolocationTrigger,
+  useOutsideDismiss,
   type SearchState,
 } from './useLocationComboboxHelpers.js';
 
@@ -18,49 +20,6 @@ import {
 export type { SearchState } from './useLocationComboboxHelpers.js';
 
 const SEARCH_DEBOUNCE_MS = 350;
-
-function runDebouncedQuery(
-  query: string,
-  isHindi: boolean,
-  signal: AbortSignal,
-  canOpenRef: RefObject<boolean>,
-  setSearchState: Dispatch<SetStateAction<SearchState>>,
-  setStatusMessage: Dispatch<SetStateAction<string>>,
-): void {
-  void searchLocations(extractCitySearchTerm(query), signal)
-    .then((items) => {
-      if (signal.aborted) return;
-      const isOpen = canOpenRef.current && items.length > 0;
-      setSearchState({
-        results: items,
-        isOpen,
-        isSearching: false,
-        activeIndex: isOpen ? 0 : -1,
-        resultQuery: query,
-      });
-      if (items.length === 0) {
-        setStatusMessage(
-          isHindi
-            ? 'कोई मेल खाने वाला भारतीय शहर नहीं मिला।'
-            : 'No matching Indian locations found.',
-        );
-      }
-    })
-    .catch((err: unknown) => {
-      void err;
-      if (signal.aborted) return;
-      setSearchState(INITIAL_SEARCH_STATE);
-      setStatusMessage(
-        isHindi ? 'स्थान खोज विफल रही। पुनः प्रयास करें।' : 'Location search failed. Please retry.',
-      );
-    });
-}
-
-function extractCitySearchTerm(rawQuery: string): string {
-  const trimmed = rawQuery.trim();
-  const commaIdx = trimmed.indexOf(',');
-  return commaIdx === -1 ? trimmed : trimmed.slice(0, commaIdx).trim();
-}
 
 function useDebouncedLocationSearch(
   query: string,
@@ -89,12 +48,7 @@ function useDebouncedLocationSearch(
     setSearchState({ ...INITIAL_SEARCH_STATE, isSearching: true });
     const timer = setTimeout(() => {
       runDebouncedQuery(
-        query,
-        isHindiRef.current,
-        controller.signal,
-        canOpenRef,
-        setSearchState,
-        setStatusMessage,
+        query, isHindiRef.current, controller.signal, canOpenRef, setSearchState, setStatusMessage,
       );
     }, SEARCH_DEBOUNCE_MS);
     return () => {
@@ -102,23 +56,6 @@ function useDebouncedLocationSearch(
       controller.abort();
     };
   }, [query, suppressedQueryRef, canOpenRef, setSearchState, setStatusMessage]);
-}
-
-function useOutsideDismiss(
-  containerRef: RefObject<HTMLDivElement | null>,
-  closeSuggestions: () => void,
-): void {
-  useEffect(() => {
-    const onDocDown = (event: MouseEvent): void => {
-      const target = event.target;
-      const el = containerRef.current;
-      if (el !== null && target instanceof Node && !el.contains(target)) {
-        closeSuggestions();
-      }
-    };
-    document.addEventListener('mousedown', onDocDown);
-    return () => document.removeEventListener('mousedown', onDocDown);
-  }, [containerRef, closeSuggestions]);
 }
 
 /** Return contract for the useLocationCombobox controller hook. */
@@ -137,24 +74,39 @@ interface LocationComboboxController {
 }
 
 function useSyncCustomLocation(
+  presetSelectionRevision: number | string | undefined,
   customLocation: CustomLocation | undefined,
   suppressedQueryRef: MutableRefObject<string | null>,
+  selectionEpochRef: MutableRefObject<number>,
   setQuery: Dispatch<SetStateAction<string>>,
   setSearchState: Dispatch<SetStateAction<SearchState>>,
+  setIsLocating: Dispatch<SetStateAction<boolean>>,
 ): void {
-  useEffect(() => {
+  useLayoutEffect(() => {
+    selectionEpochRef.current += 1;
+    setIsLocating(false);
     const formatted = customLocation !== undefined ? formatDisplayLocation(customLocation) : '';
     suppressedQueryRef.current = formatted;
     setQuery(formatted);
     setSearchState(INITIAL_SEARCH_STATE);
-  }, [customLocation, suppressedQueryRef, setQuery, setSearchState]);
+  }, [
+    customLocation,
+    presetSelectionRevision,
+    suppressedQueryRef,
+    selectionEpochRef,
+    setQuery,
+    setSearchState,
+    setIsLocating,
+  ]);
 }
 
 function useSuggestionControls(
   query: string,
+  selectionEpochRef: MutableRefObject<number>,
   setQuery: Dispatch<SetStateAction<string>>,
   setSearchState: Dispatch<SetStateAction<SearchState>>,
   setStatusMessage: Dispatch<SetStateAction<string>>,
+  setIsLocating: Dispatch<SetStateAction<boolean>>,
 ) {
   const canOpenRef = useRef(true);
   const closeSuggestions = useCallback(() => {
@@ -168,10 +120,12 @@ function useSuggestionControls(
     );
   }, [query, setSearchState]);
   const changeQuery = useCallback((value: string) => {
+    selectionEpochRef.current += 1;
+    setIsLocating(false);
     canOpenRef.current = true;
     setQuery(value);
     setStatusMessage('');
-  }, [setQuery, setStatusMessage]);
+  }, [selectionEpochRef, setIsLocating, setQuery, setStatusMessage]);
   return { canOpenRef, changeQuery, closeSuggestions, handleFocusInput };
 }
 
@@ -206,26 +160,31 @@ export function useLocationCombobox(
   isHindi: boolean,
   customLocation: CustomLocation | undefined,
   onSelectLocation: (item: LocationSearchItem) => void,
+  presetSelectionRevision?: number | string,
 ): LocationComboboxController {
   const containerRef = useRef<HTMLDivElement>(null);
-  const initialDisplay = customLocation !== undefined ? formatDisplayLocation(customLocation) : '';
-  const suppressedQueryRef = useRef<string | null>(initialDisplay);
-  const [query, setQuery] = useState<string>(initialDisplay);
+  const initial = customLocation !== undefined ? formatDisplayLocation(customLocation) : '';
+  const suppressedQueryRef = useRef<string | null>(initial);
+  const selectionEpochRef = useRef<number>(0);
+  const [query, setQuery] = useState<string>(initial);
   const [searchState, setSearchState] = useState<SearchState>(INITIAL_SEARCH_STATE);
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>('');
-
   const { canOpenRef, ...controls } = useSuggestionControls(
-    query, setQuery, setSearchState, setStatusMessage,
+    query, selectionEpochRef, setQuery, setSearchState, setStatusMessage, setIsLocating,
   );
-  useSyncCustomLocation(customLocation, suppressedQueryRef, setQuery, setSearchState);
+  useSyncCustomLocation(
+    presetSelectionRevision, customLocation, suppressedQueryRef, selectionEpochRef,
+    setQuery, setSearchState, setIsLocating,
+  );
   useDebouncedLocationSearch(
     query, isHindi, suppressedQueryRef, canOpenRef, setSearchState, setStatusMessage,
   );
-  const { closeSuggestions } = controls;
-  useOutsideDismiss(containerRef, closeSuggestions);
+  useOutsideDismiss(containerRef, controls.closeSuggestions);
 
   const commitSelection = useCallback((item: LocationSearchItem) => {
+    selectionEpochRef.current += 1;
+    setIsLocating(false);
     const display = formatDisplayLocation(item);
     suppressedQueryRef.current = display;
     setQuery(display);
@@ -235,25 +194,13 @@ export function useLocationCombobox(
   }, [isHindi, onSelectLocation]);
 
   const handleInputKeyDown = useSuggestionKeyboard(
-    query, searchState, closeSuggestions, commitSelection, setSearchState,
+    query, searchState, controls.closeSuggestions, commitSelection, setSearchState,
   );
-
   const handleUseMyLocation = useGeolocationTrigger(
-    isHindi,
-    commitSelection,
-    setIsLocating,
-    setStatusMessage,
+    isHindi, commitSelection, setIsLocating, setStatusMessage, selectionEpochRef,
   );
-
   return {
-    containerRef,
-    query,
-    searchState,
-    isLocating,
-    statusMessage,
-    ...controls,
-    handleInputKeyDown,
-    handleUseMyLocation,
-    commitSelection,
+    containerRef, query, searchState, isLocating, statusMessage, ...controls,
+    handleInputKeyDown, handleUseMyLocation, commitSelection,
   };
 }

@@ -140,10 +140,11 @@ export async function runAiJudge(
   const snapshot = buildSnapshot(rootDir, deterministicResults, transcripts);
   const geminiKey = process.env['GEMINI_API_KEY']?.trim() ?? '';
   const openAiKey = process.env['OPENAI_API_KEY']?.trim() ?? '';
+  const keysConfigured = geminiKey.length > 0 || openAiKey.length > 0;
   const results = await collectJudgeOutputs(geminiKey, openAiKey, snapshot);
   if (results.length === 0) {
-    const okProbes = transcripts.filter((t) => t.status >= 200 && t.status < 500).length;
-    return buildColdFallback(deterministicResults, okProbes);
+    const okProbes = transcripts.filter((t) => t.passed).length;
+    return buildColdFallback(deterministicResults, okProbes, keysConfigured);
   }
   const payloads = results.map((r) => r.data);
   return {

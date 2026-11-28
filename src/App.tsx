@@ -12,14 +12,21 @@ function useSessionState(): {
   readonly authUser: AuthUser | null;
   readonly setAuthUser: React.Dispatch<React.SetStateAction<AuthUser | null>>;
   readonly isCheckingSession: boolean;
+  readonly sessionCheckFailed: boolean;
+  readonly retrySessionCheck: () => void;
   readonly hasInteractedAuthRef: React.MutableRefObject<boolean>;
 } {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [isCheckingSession, setIsCheckingSession] = useState<boolean>(true);
+  const [sessionCheckFailed, setSessionCheckFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const retrySessionCheck = useCallback(() => setAttempt((value) => value + 1), []);
   const hasInteractedAuthRef = useRef<boolean>(false);
 
   useEffect(() => {
     const controller = new AbortController();
+    setIsCheckingSession(true);
+    setSessionCheckFailed(false);
     void (async () => {
       try {
         const res = await fetchSession(controller.signal);
@@ -29,7 +36,7 @@ function useSessionState(): {
       } catch (err: unknown) {
         void err;
         if (!controller.signal.aborted) {
-          setAuthUser(null);
+          setSessionCheckFailed(true);
         }
       } finally {
         if (!controller.signal.aborted) {
@@ -38,54 +45,61 @@ function useSessionState(): {
       }
     })();
     return () => controller.abort();
-  }, []);
+  }, [attempt]);
 
-  return { authUser, setAuthUser, isCheckingSession, hasInteractedAuthRef };
+  return {
+    authUser, setAuthUser, isCheckingSession, sessionCheckFailed, retrySessionCheck,
+    hasInteractedAuthRef,
+  };
 }
 
-function useSignOut(onSuccess: () => void) {
-  const isSigningOutRef = useRef<boolean>(false);
-  const [signOutFailed, setSignOutFailed] = useState(false);
-
+function useSignOut(
+  onSuccess: () => void,
+  flushPendingPrefsRef: React.MutableRefObject<(() => Promise<void> | undefined) | null>,
+) {
+  const isSigningOutRef = useRef(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [signOutFailed, setSignOutFailed] = useState<'save' | 'logout'>();
   const handleSignOut = useCallback((): void => {
     if (isSigningOutRef.current) return;
     isSigningOutRef.current = true;
-    setSignOutFailed(false);
-    void logoutSession()
-      .then(({ ok }) => {
+    setIsSigningOut(true);
+    setSignOutFailed(undefined);
+    void (async () => {
+      try {
+        try {
+          await flushPendingPrefsRef.current?.();
+        } catch {
+          setSignOutFailed('save');
+          return;
+        }
+        const { ok } = await logoutSession();
         if (ok) onSuccess();
-        else setSignOutFailed(true);
-      })
-      .catch((err: unknown) => {
-        void err;
-        setSignOutFailed(true);
-      })
-      .finally(() => {
+        else setSignOutFailed('logout');
+      } catch {
+        setSignOutFailed('logout');
+      } finally {
         isSigningOutRef.current = false;
-      });
-  }, [onSuccess]);
-
-  return { handleSignOut, signOutFailed };
+        setIsSigningOut(false);
+      }
+    })();
+  }, [flushPendingPrefsRef, onSuccess]);
+  return { handleSignOut, signOutFailed, isSigningOut };
 }
 
-/** Root SmogWise Virtual application layout with authentication gate and WCAG 2.1 AA landmarks. */
-export const App: React.FC = function App() {
-  const { authUser, setAuthUser, isCheckingSession, hasInteractedAuthRef } = useSessionState();
-  const [gateLanguage, setGateLanguage] = useState<LanguageCode>('en');
-  const finishSignOut = useCallback(() => {
-    hasInteractedAuthRef.current = true;
-    setAuthUser(null);
-  }, [hasInteractedAuthRef, setAuthUser]);
-  const { handleSignOut, signOutFailed } = useSignOut(finishSignOut);
-
+function useSignOutErrorFocus(signOutFailed: 'save' | 'logout' | undefined): void {
   useEffect(() => {
-    if (authUser === null) {
-      document.documentElement.lang = gateLanguage;
-    }
-  }, [authUser, gateLanguage]);
+    if (signOutFailed === undefined) return undefined;
+    const rafId = window.requestAnimationFrame(() => {
+      document.getElementById('sign-out-error-alert')?.focus();
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [signOutFailed]);
+}
 
+function useAuthFocus(authUser: AuthUser | null, interacted: React.RefObject<boolean>): void {
   useEffect(() => {
-    if (!hasInteractedAuthRef.current) {
+    if (!interacted.current) {
       return undefined;
     }
     const targetId = authUser !== null ? 'main-content' : 'login-email';
@@ -93,7 +107,36 @@ export const App: React.FC = function App() {
       document.getElementById(targetId)?.focus();
     });
     return () => window.cancelAnimationFrame(rafId);
-  }, [authUser, hasInteractedAuthRef]);
+  }, [authUser, interacted]);
+}
+
+/** Root SmogWise Virtual application layout with authentication gate and WCAG 2.1 AA landmarks. */
+export const App: React.FC = function App() {
+  const {
+    authUser, setAuthUser, isCheckingSession, hasInteractedAuthRef,
+    sessionCheckFailed, retrySessionCheck,
+  } = useSessionState();
+  const [gateLanguage, setGateLanguage] = useState<LanguageCode>('en');
+  const flushPendingPrefsRef = useRef<(() => Promise<void> | undefined) | null>(null);
+  const registerPrefsFlush = useCallback((fn: () => Promise<void> | undefined) => {
+    flushPendingPrefsRef.current = fn;
+  }, []);
+  const finishSignOut = useCallback(() => {
+    hasInteractedAuthRef.current = true;
+    setAuthUser(null);
+  }, [hasInteractedAuthRef, setAuthUser]);
+  const { handleSignOut, signOutFailed, isSigningOut } = useSignOut(
+    finishSignOut, flushPendingPrefsRef,
+  );
+
+  useEffect(() => {
+    if (authUser === null) {
+      document.documentElement.lang = gateLanguage;
+    }
+  }, [authUser, gateLanguage]);
+
+  useAuthFocus(authUser, hasInteractedAuthRef);
+  useSignOutErrorFocus(signOutFailed);
 
   const handleLoginSuccess = useCallback((user: AuthUser): void => {
     hasInteractedAuthRef.current = true;
@@ -105,6 +148,8 @@ export const App: React.FC = function App() {
       <LoginGate
         language={gateLanguage}
         isCheckingSession={isCheckingSession}
+        sessionCheckFailed={sessionCheckFailed}
+        onRetrySessionCheck={retrySessionCheck}
         onLanguageChange={setGateLanguage}
         onLoginSuccess={handleLoginSuccess}
       />
@@ -115,7 +160,9 @@ export const App: React.FC = function App() {
     <AuthenticatedWorkspace
       authUser={authUser}
       onSignOut={handleSignOut}
-      signOutFailed={signOutFailed}
+      {...(signOutFailed === undefined ? {} : { signOutFailed })}
+      isSigningOut={isSigningOut}
+      onRegisterPrefsFlush={registerPrefsFlush}
     />
   );
 };

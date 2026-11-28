@@ -3,11 +3,17 @@
  * and bilingual accessible validation.
  */
 
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { isPlainRecord } from '../domain/domainUtils.js';
-import type { UserProfile } from '../domain/types.js';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import type { DeterministicReport, UserProfile } from '../domain/types.js';
 import type { AiAskApiResponse } from '../services/apiClient.js';
-import { postAiAsk } from '../services/apiClient.js';
+import { ApiError, postAiAsk } from '../services/apiClient.js';
 import {
   AssistantAnswerCard,
   type AssistantErrorCode,
@@ -16,14 +22,27 @@ import {
   QuickPromptsBar,
 } from './GroundedAssistantParts.js';
 
+type SyncReportFn = (
+  report: DeterministicReport,
+  token?: string,
+  requestedToken?: string,
+) => void;
+
 /** Props for the GroundedAssistant component. */
 export interface GroundedAssistantProps {
   readonly profile: UserProfile;
+  readonly observationId?: string | undefined;
+  readonly snapshotToken?: string | undefined;
+  readonly onSyncReport?: SyncReportFn | undefined;
 }
 
 function dispatchAssistantAsk(
   trimmed: string,
   profile: UserProfile,
+  latestObsRef: React.RefObject<string | undefined>,
+  latestTokenRef: React.RefObject<string | undefined>,
+  snapshotToken: string | undefined,
+  onSyncReport: SyncReportFn | undefined,
   abortRef: React.MutableRefObject<AbortController | null>,
   setResponse: React.Dispatch<React.SetStateAction<AiAskApiResponse | undefined>>,
   setIsLoading: React.Dispatch<React.SetStateAction<boolean>>,
@@ -35,39 +54,72 @@ function dispatchAssistantAsk(
   setIsLoading(true);
   setErrorCode(null);
 
-  void postAiAsk(trimmed, profile, controller.signal)
+  void postAiAsk(trimmed, profile, controller.signal, snapshotToken)
     .then((res) => {
-      if (!controller.signal.aborted) {
-        setResponse(res);
-        setIsLoading(false);
+      if (controller.signal.aborted) return;
+      const obsChanged = res.report.observationId !== latestObsRef.current;
+      const tokenRenewed =
+        res.snapshotToken !== undefined && res.snapshotToken !== latestTokenRef.current;
+      if (res.mode !== 'guard_refusal' && (obsChanged || tokenRenewed)) {
+        onSyncReport?.(res.report, res.snapshotToken, snapshotToken);
       }
+      setResponse(res);
+      setIsLoading(false);
     })
     .catch((err: unknown) => {
-      void err;
       if (!controller.signal.aborted) {
-        setErrorCode('ASK_FAILED');
+        const unavailable = err instanceof ApiError && err.code === 'LIVE_AQ_UNAVAILABLE';
+        setErrorCode(unavailable ? 'AQ_UNAVAILABLE' : 'ASK_FAILED');
         setIsLoading(false);
       }
     });
 }
 
-function useAssistantController(profile: UserProfile) {
+function buildAssistantProfileKey(profile: UserProfile): string {
+  return JSON.stringify([
+    profile.persona,
+    profile.cityId,
+    profile.language,
+    profile.householdSize,
+    profile.hasVulnerableMember,
+    profile.monthlyBudgetInr,
+    profile.roomVolumeM3,
+    profile.commuteMode,
+    profile.commuteDistanceKm,
+    profile.cookingFuel,
+    profile.rwaHouseholds,
+    profile.rwaAdoptionRate,
+    profile.customLocation?.name,
+    profile.customLocation?.state,
+    profile.customLocation?.lat,
+    profile.customLocation?.lon,
+    [...profile.activeHacks].sort().join(','),
+  ]);
+}
+
+function useAssistantController(
+  profile: UserProfile,
+  observationId?: string,
+  snapshotToken?: string,
+  onSyncReport?: SyncReportFn,
+) {
   const [question, setQuestion] = useState<string>('');
   const [response, setResponse] = useState<AiAskApiResponse | undefined>(undefined);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorCode, setErrorCode] = useState<AssistantErrorCode | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const questionRef = useRef<string>(question);
+  const latestObsRef = useRef<string | undefined>(observationId);
+  const latestTokenRef = useRef<string | undefined>(snapshotToken);
 
   useEffect(() => {
     questionRef.current = question;
-  }, [question]);
+    latestObsRef.current = observationId;
+    latestTokenRef.current = snapshotToken;
+  }, [observationId, question, snapshotToken]);
 
   const abortPendingAsk = useCallback(() => abortRef.current?.abort(), []);
-  const profileKey = JSON.stringify(profile, (_key, value: unknown): unknown => {
-    if (!isPlainRecord(value)) return value;
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]]));
-  });
+  const profileKey = useMemo(() => buildAssistantProfileKey(profile), [profile]);
   useLayoutEffect(() => {
     setQuestion('');
     setResponse(undefined);
@@ -76,45 +128,35 @@ function useAssistantController(profile: UserProfile) {
     return abortPendingAsk;
   }, [abortPendingAsk, profileKey]);
 
-  const submitQuestion = useCallback(
-    (text: string): void => {
-      const trimmed = text.trim();
-      if (trimmed.length === 0) {
-        setErrorCode('EMPTY_QUESTION');
-        return;
-      }
-      dispatchAssistantAsk(trimmed, profile, abortRef, setResponse, setIsLoading, setErrorCode);
-    },
-    [profile],
-  );
-
-  const handleQuickSelect = useCallback(
-    (label: string) => {
-      setQuestion(label);
-      submitQuestion(label);
-    },
-    [submitQuestion],
-  );
+  const submitQuestion = useCallback((text: string): void => {
+    const trimmed = text.trim();
+    if (trimmed.length === 0) {
+      setErrorCode('EMPTY_QUESTION');
+      return;
+    }
+    dispatchAssistantAsk(
+      trimmed, profile, latestObsRef, latestTokenRef, snapshotToken, onSyncReport,
+      abortRef, setResponse, setIsLoading, setErrorCode,
+    );
+  }, [onSyncReport, profile, snapshotToken]);
+  const handleQuickSelect = useCallback((label: string) => {
+    setQuestion(label);
+    submitQuestion(label);
+  }, [submitQuestion]);
   const handleQuestionChange = useCallback((val: string) => {
     setQuestion(val);
     setErrorCode((prev) => (prev === 'EMPTY_QUESTION' ? null : prev));
   }, []);
   const handleFormSubmit = useCallback(() => submitQuestion(questionRef.current), [submitQuestion]);
-
   return {
-    question,
-    response,
-    isLoading,
-    errorCode,
-    handleQuickSelect,
-    handleQuestionChange,
-    handleFormSubmit,
+    question, response, isLoading, errorCode,
+    handleQuickSelect, handleQuestionChange, handleFormSubmit,
   };
 }
 
 /** Grounded Tier 2 GenAI Q&A panel calling /api/ai/ask with citation pills. */
 export const GroundedAssistant: React.FC<GroundedAssistantProps> = React.memo(
-  function GroundedAssistant({ profile }) {
+  function GroundedAssistant({ profile, observationId, snapshotToken, onSyncReport }) {
     const isHi = profile.language === 'hi';
     const {
       question,
@@ -124,7 +166,7 @@ export const GroundedAssistant: React.FC<GroundedAssistantProps> = React.memo(
       handleQuickSelect,
       handleQuestionChange,
       handleFormSubmit,
-    } = useAssistantController(profile);
+    } = useAssistantController(profile, observationId, snapshotToken, onSyncReport);
     const errorMsg = formatAssistantError(errorCode, isHi);
 
     return (
@@ -142,6 +184,7 @@ export const GroundedAssistant: React.FC<GroundedAssistantProps> = React.memo(
           isHi={isHi}
           isLoading={isLoading}
           hasError={errorCode !== null}
+          isFieldInvalid={errorCode === 'EMPTY_QUESTION'}
           onQuestionChange={handleQuestionChange}
           onSubmit={handleFormSubmit}
         />

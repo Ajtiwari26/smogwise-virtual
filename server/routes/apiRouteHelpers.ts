@@ -112,14 +112,15 @@ export function buildDefaultProfile(city?: string, language: LanguageCode = 'en'
   };
 }
 
-/** Parsed `/api/plan` or `/api/plan/briefing` request payload and live-AQ flag. */
+/** Parsed `/api/plan` or `/api/plan/briefing` request payload, live-AQ flag, and token. */
 interface ParsedPlanRequest {
   readonly profile: UserProfile;
   readonly useLiveAq: boolean;
+  readonly snapshotToken?: string;
 }
 
 /**
- * Parses either a `{ profile, useLiveAq? }` envelope or a direct UserProfile payload
+ * Parses either a `{ profile, useLiveAq?, snapshotToken? }` envelope or a direct UserProfile
  * for plan and briefing routes, preserving explicit `useLiveAq: false` flags.
  */
 export function parsePlanRequest(body: unknown): ParsedPlanRequest {
@@ -128,6 +129,7 @@ export function parsePlanRequest(body: unknown): ParsedPlanRequest {
     return {
       profile: toUserProfile(envelope.profile),
       useLiveAq: envelope.useLiveAq ?? true,
+      ...(envelope.snapshotToken !== undefined ? { snapshotToken: envelope.snapshotToken } : {}),
     };
   }
   return {
@@ -136,14 +138,29 @@ export function parsePlanRequest(body: unknown): ParsedPlanRequest {
   };
 }
 
+/** Parsed preferences payload including optional optimistic-concurrency version. */
+export interface ParsedPreferencesSave {
+  readonly profile: UserProfile;
+  readonly expectedVersion?: number;
+}
+
 /**
- * Parses a strict `{ profile }` envelope or direct UserProfile payload for preferences storage.
+ * Parses `{ profile, expectedVersion? }` or a raw UserProfile payload for preferences storage.
  */
-export function parsePreferencesProfile(body: unknown): UserProfile {
+export function parsePreferencesSaveInput(body: unknown): ParsedPreferencesSave {
   if (isPlainRecord(body) && Object.hasOwn(body, 'profile')) {
-    return toUserProfile(PreferencesEnvelopeSchema.parse(body).profile);
+    const parsed = PreferencesEnvelopeSchema.parse(body);
+    return {
+      profile: toUserProfile(parsed.profile),
+      ...(parsed.expectedVersion !== undefined ? { expectedVersion: parsed.expectedVersion } : {}),
+    };
   }
-  return toUserProfile(UserProfileSchema.parse(body));
+  return { profile: toUserProfile(UserProfileSchema.parse(body)) };
+}
+
+/** Parses a preferences save body and returns the normalized domain UserProfile. */
+export function parsePreferencesProfile(body: unknown): UserProfile {
+  return parsePreferencesSaveInput(body).profile;
 }
 
 /** Fetches live or fallback air quality for either custom coordinates or preset city IDs. */

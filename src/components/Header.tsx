@@ -3,17 +3,20 @@
  */
 
 import React from 'react';
-import { CITY_PRESETS } from '../domain/cityPresets.js';
 import type { CityPreset, LanguageCode } from '../domain/types.js';
 import type { AuthUser } from '../services/apiClient.js';
+import { HeaderControls } from './HeaderControls.js';
 
 /** Props for the top navigation Header component. */
 export interface HeaderProps {
-  readonly city: CityPreset;
+  readonly city?: CityPreset;
   readonly language: LanguageCode;
-  readonly dataSource: 'live_open_meteo' | 'city_preset';
-  readonly isSyncing: boolean;
-  readonly onCityChange: (cityId: string) => void;
+  readonly dataSource?: 'live_open_meteo' | 'city_preset';
+  readonly isSyncing?: boolean;
+  readonly aqUnavailable?: boolean;
+  readonly hasLocalSections?: boolean;
+  readonly isSigningOut?: boolean;
+  readonly onCityChange?: (cityId: string) => void;
   readonly onLanguageChange: (lang: LanguageCode) => void;
   readonly isAuthenticated?: boolean;
   readonly authUser?: AuthUser;
@@ -34,107 +37,27 @@ const GATE_NAV_ITEMS = [
   { href: '#security-features', en: 'Security', hi: 'सुरक्षा' },
 ] as const;
 
+const LOCAL_ONLY_HREFS = new Set(['#impact', '#routine', '#what-if']);
+
 function getSourceLabel(
   dataSource: 'live_open_meteo' | 'city_preset',
   isSyncing: boolean,
   lang: LanguageCode,
+  unavailable: boolean,
 ): string {
-  if (isSyncing) {
-    return lang === 'hi' ? 'अपडेट हो रहा है...' : 'Syncing AQ...';
-  }
-  if (dataSource === 'live_open_meteo') {
-    return lang === 'hi' ? 'लाइव Open-Meteo AQ' : 'Live Open-Meteo AQ';
-  }
-  return lang === 'hi' ? 'ऑफ़लाइन शहर प्रीसेट' : 'Offline City Preset';
+  const hi = lang === 'hi';
+  if (unavailable) return hi ? 'स्थानीय वायु गुणवत्ता उपलब्ध नहीं' : 'Local air quality unavailable';
+  if (isSyncing) return hi ? 'लाइव डेटा अपडेट हो रहा है…' : 'Updating live data…';
+  if (dataSource === 'live_open_meteo') return hi ? 'लाइव Open-Meteo AQ' : 'Live Open-Meteo AQ';
+  return hi ? 'ऑफ़लाइन शहर प्रीसेट' : 'Offline City Preset';
 }
 
-const LanguageSwitcher: React.FC<{
-  readonly language: LanguageCode;
-  readonly onChange: (lang: LanguageCode) => void;
-}> = React.memo(function LanguageSwitcher({ language, onChange }) {
-  const isHi = language === 'hi';
-  return (
-    <div
-      role="group"
-      aria-label={isHi ? 'भाषा चुनें' : 'Language selector'}
-      className="inline-flex rounded-md border border-slate-500 bg-slate-100 p-0.5"
-    >
-      <button
-        type="button"
-        lang="en"
-        aria-pressed={language === 'en'}
-        onClick={() => onChange('en')}
-        className={`rounded px-2.5 py-1.5 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700 ${
-          language === 'en' ? 'bg-slate-900 text-white' : 'text-slate-900 hover:bg-slate-200'
-        }`}
-      >
-        EN
-      </button>
-      <button
-        type="button"
-        lang="hi"
-        aria-pressed={language === 'hi'}
-        onClick={() => onChange('hi')}
-        className={`rounded px-2.5 py-1.5 text-xs font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700 ${
-          language === 'hi' ? 'bg-slate-900 text-white' : 'text-slate-900 hover:bg-slate-200'
-        }`}
-      >
-        हिन्दी
-      </button>
-    </div>
-  );
-});
-
-const CityPicker: React.FC<{
-  readonly city: CityPreset;
-  readonly isHi: boolean;
-  readonly onCityChange: (cityId: string) => void;
-}> = React.memo(function CityPicker({ city, isHi, onCityChange }) {
-  const isCustomCity = !CITY_PRESETS.some((p) => p.id === city.id);
-  return (
-    <div className="flex items-center gap-2">
-      <label htmlFor="header-city-select" className="text-xs font-semibold text-slate-800">
-        {isHi ? 'शहर' : 'City'}
-      </label>
-      <select
-        id="header-city-select"
-        value={city.id}
-        onChange={(e) => onCityChange(e.target.value)}
-        className="rounded-md border border-slate-500 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700"
-      >
-        {isCustomCity && (
-          <option value={city.id}>{isHi ? city.nameHi : city.name}</option>
-        )}
-        {CITY_PRESETS.map((preset) => (
-          <option key={preset.id} value={preset.id}>
-            {isHi ? preset.nameHi : preset.name}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-});
-
-const SessionControls: React.FC<{
-  readonly authUser: AuthUser;
-  readonly isHi: boolean;
-  readonly onSignOut: () => void;
-}> = React.memo(function SessionControls({ authUser, isHi, onSignOut }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="rounded-full border border-slate-400 bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-900">
-        {authUser.name}
-      </span>
-      <button
-        type="button"
-        onClick={onSignOut}
-        className="rounded-md border border-slate-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-700"
-      >
-        {isHi ? 'लॉग आउट' : 'Sign Out'}
-      </button>
-    </div>
-  );
-});
+function getHeaderNavItems(isGateMode: boolean, hasLocalSections: boolean) {
+  if (isGateMode) return GATE_NAV_ITEMS;
+  return hasLocalSections
+    ? WORKSPACE_NAV_ITEMS
+    : WORKSPACE_NAV_ITEMS.filter((item) => !LOCAL_ONLY_HREFS.has(item.href));
+}
 
 const HeaderBrand: React.FC<{
   readonly isHi: boolean;
@@ -166,8 +89,9 @@ const HeaderBrand: React.FC<{
 const HeaderNav: React.FC<{
   readonly isHi: boolean;
   readonly isGateMode: boolean;
-}> = React.memo(function HeaderNav({ isHi, isGateMode }) {
-  const navItems = isGateMode ? GATE_NAV_ITEMS : WORKSPACE_NAV_ITEMS;
+  readonly hasLocalSections: boolean;
+}> = React.memo(function HeaderNav({ isHi, isGateMode, hasLocalSections }) {
+  const navItems = getHeaderNavItems(isGateMode, hasLocalSections);
   return (
     <nav aria-label={isHi ? 'मुख्य नेविगेशन' : 'Primary navigation'}>
       <ul className="flex flex-wrap items-center gap-2 text-sm font-medium">
@@ -186,23 +110,27 @@ const HeaderNav: React.FC<{
   );
 });
 
-/** Accessible top header with skip link, single H1, nav, city selector, and EN/HI toggle. */
-export const Header: React.FC<HeaderProps> = React.memo(function Header({
-  city,
-  language,
-  dataSource,
-  isSyncing,
-  onCityChange,
-  onLanguageChange,
-  isAuthenticated,
-  authUser,
-  onSignOut,
-}) {
-  const isHi = language === 'hi';
-  const isGateMode = isAuthenticated === false;
-  const sourceText = getSourceLabel(dataSource, isSyncing, language);
-  const showSessionControls = !isGateMode && authUser !== undefined && onSignOut !== undefined;
+function resolveHeaderFlags(props: HeaderProps) {
+  const aqUnavailable = props.aqUnavailable === true;
+  return {
+    isHi: props.language === 'hi',
+    isGateMode: props.isAuthenticated === false,
+    hasLocalSections: props.hasLocalSections ?? !aqUnavailable,
+    isSigningOut: props.isSigningOut === true,
+    sourceText: getSourceLabel(
+      props.dataSource ?? 'city_preset',
+      props.isSyncing === true,
+      props.language,
+      aqUnavailable,
+    ),
+  };
+}
 
+/** Accessible top header with skip link, single H1, nav, city selector, and EN/HI toggle. */
+export const Header: React.FC<HeaderProps> = React.memo(function Header(props) {
+  const {
+    isHi, isGateMode, hasLocalSections, isSigningOut, sourceText,
+  } = resolveHeaderFlags(props);
   return (
     <header className="border-b border-slate-300 bg-white text-slate-900 shadow-sm">
       <a href="#main-content" className="skip-link">
@@ -210,14 +138,18 @@ export const Header: React.FC<HeaderProps> = React.memo(function Header({
       </a>
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-3">
         <HeaderBrand isHi={isHi} isGateMode={isGateMode} sourceText={sourceText} />
-        <HeaderNav isHi={isHi} isGateMode={isGateMode} />
-        <div className="flex flex-wrap items-center gap-3">
-          {!isGateMode && <CityPicker city={city} isHi={isHi} onCityChange={onCityChange} />}
-          <LanguageSwitcher language={language} onChange={onLanguageChange} />
-          {showSessionControls && (
-            <SessionControls authUser={authUser} isHi={isHi} onSignOut={onSignOut} />
-          )}
-        </div>
+        <HeaderNav isHi={isHi} isGateMode={isGateMode} hasLocalSections={hasLocalSections} />
+        <HeaderControls
+          city={props.city}
+          language={props.language}
+          isHi={isHi}
+          isGateMode={isGateMode}
+          isSigningOut={isSigningOut}
+          onCityChange={props.onCityChange}
+          onLanguageChange={props.onLanguageChange}
+          authUser={props.authUser}
+          onSignOut={props.onSignOut}
+        />
       </div>
     </header>
   );

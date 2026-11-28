@@ -15,8 +15,11 @@ export function canVentilateAfternoon(outdoorPm25: number, indoorPm25: number): 
 }
 
 /** Reads the modeled afternoon decision, with an estimate for older reports without a series. */
-export function getAfternoonVentilation(report: Pick<DeterministicReport, 'city' | 'exposure'>) {
+export function getAfternoonVentilation(report: Pick<DeterministicReport, 'city' | 'exposure' | 'aqStatus'>) {
   const { city, exposure } = report;
+  if (report.aqStatus === 'unavailable' || report.aqStatus === 'pending') {
+    return { eligibleHour: undefined, canVentilate: false };
+  }
   const eligibleHour = exposure.hourlySeries?.find((point) => point.isOptimalVentilation);
   return {
     eligibleHour,

@@ -8,8 +8,6 @@ import type { Request, Response, Router } from 'express';
 import type { z } from 'zod';
 import { compareWhatIf, computeFullPlan } from '../../src/domain/impactService.js';
 import { isSameLocationTarget } from '../../src/domain/liveAqResolver.js';
-import type { FullPlanOutput, UserProfile } from '../../src/domain/types.js';
-import { createLruCache, hashCacheKey } from '../cache/lruCache.js';
 import {
   AqiQuerySchema,
   LocationSearchQuerySchema,
@@ -18,13 +16,18 @@ import {
   AiAskSchema,
   WhatIfSchema,
 } from '../middleware/requestSchemas.js';
+import { inspectAndSanitizePrompt } from '../middleware/promptGuard.js';
 import { createRouteLimiters } from '../middleware/security.js';
-import { searchIndianLocations } from '../services/geocodingClient.js';
+import { searchIndianLocationsDetailed } from '../services/geocodingClient.js';
 import { askGroundedAssistant, generatePlanBriefing } from '../services/genaiService.js';
 import {
   fetchAirQualityForCity,
   fetchAirQualityForCoords,
 } from '../services/openMeteoClient.js';
+import {
+  resolveAiAskPlan,
+  resolvePlanFromSnapshotOrLive,
+} from './apiPlanResolver.js';
 import {
   buildDefaultProfile,
   parsePlanRequest,
@@ -34,32 +37,7 @@ import {
 } from './apiRouteHelpers.js';
 import { createAuthRouter } from './authRoutes.js';
 
-const PLAN_CACHE_TTL_MS = 10 * 60 * 1000;
 const CITY_AQI_CACHE_CONTROL = 'public, s-maxage=300, stale-while-revalidate=600';
-const planCache = createLruCache<FullPlanOutput>(200, PLAN_CACHE_TTL_MS);
-
-async function resolveOrComputePlan(
-  profile: UserProfile,
-  useLiveAq = true,
-): Promise<FullPlanOutput> {
-  const liveAq = useLiveAq ? (await resolveProfileAq(profile)).liveAq : undefined;
-  const canonicalProfile: UserProfile = {
-    ...profile,
-    activeHacks: [...profile.activeHacks].sort(),
-  };
-  const cacheKey = hashCacheKey({
-    route: 'plan',
-    profile: canonicalProfile,
-    liveAq: liveAq ?? null,
-  });
-  const cached = planCache.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const plan = computeFullPlan(canonicalProfile, liveAq);
-  planCache.set(cacheKey, plan, PLAN_CACHE_TTL_MS);
-  return plan;
-}
 
 function handleHealth(_req: Request, res: Response): void {
   res.setHeader('Cache-Control', 'no-store');
@@ -77,8 +55,8 @@ async function handleLocationsSearch(req: Request, res: Response): Promise<void>
     res.status(400).json({ error: 'INVALID_QUERY', message });
     return;
   }
-  const results = await searchIndianLocations(parsed.data.q);
-  res.status(200).json({ results });
+  const { results, degraded } = await searchIndianLocationsDetailed(parsed.data.q);
+  res.status(200).json({ results, ...(degraded ? { degraded: true } : {}) });
 }
 
 type ParsedAqiQuery = z.infer<typeof AqiQuerySchema>;
@@ -118,14 +96,18 @@ async function handleAqi(req: Request, res: Response): Promise<void> {
 }
 
 async function handlePlan(req: Request, res: Response): Promise<void> {
-  const { profile, useLiveAq } = parsePlanRequest(req.body);
-  const plan = await resolveOrComputePlan(profile, useLiveAq);
-  res.status(200).json(plan);
+  const { profile, useLiveAq, snapshotToken } = parsePlanRequest(req.body);
+  const { plan, snapshotToken: issuedToken } = await resolvePlanFromSnapshotOrLive(
+    profile,
+    useLiveAq,
+    snapshotToken,
+  );
+  res.status(200).json(issuedToken === undefined ? plan : { ...plan, snapshotToken: issuedToken });
 }
 
 async function handlePlanBriefing(req: Request, res: Response): Promise<void> {
-  const { profile, useLiveAq } = parsePlanRequest(req.body);
-  const plan = await resolveOrComputePlan(profile, useLiveAq);
+  const { profile, useLiveAq, snapshotToken } = parsePlanRequest(req.body);
+  const { plan } = await resolvePlanFromSnapshotOrLive(profile, useLiveAq, snapshotToken);
   const briefing = await generatePlanBriefing(profile, plan.report);
   res.status(200).json(briefing);
 }
@@ -153,13 +135,26 @@ async function handleAiAsk(req: Request, res: Response): Promise<void> {
     parsed.profile !== undefined
       ? toUserProfile(parsed.profile)
       : buildDefaultProfile(parsed.city, parsed.language ?? 'en');
-  const aqResult = await resolveProfileAq(profile);
+  const inspection = inspectAndSanitizePrompt(question);
+  if (inspection.guardTriggered) {
+    const blockedPlan = computeFullPlan(profile);
+    const refusal = await askGroundedAssistant({ question, profile, plan: blockedPlan });
+    res.status(200).json(refusal);
+    return;
+  }
+  const { plan, liveAq, snapshotToken: resolvedToken } = await resolveAiAskPlan(
+    profile, parsed.snapshotToken, inspection.sanitizedText,
+  );
   const response = await askGroundedAssistant({
     question,
     profile,
-    ...(aqResult.liveAq !== undefined ? { liveAq: aqResult.liveAq } : {}),
+    plan,
+    ...(liveAq !== undefined ? { liveAq } : {}),
   });
-  res.status(200).json(response);
+  res.status(200).json({
+    ...response,
+    ...(resolvedToken !== undefined ? { snapshotToken: resolvedToken } : {}),
+  });
 }
 
 /** Creates the Express API router with isolated per-route-group rate limiters. */

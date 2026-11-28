@@ -3,6 +3,22 @@ import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../src/App.js';
+import { DEFAULT_PROFILE } from '../../src/hooks/useSmogPlan.js';
+import { AuthenticatedWorkspace } from '../../src/components/AuthenticatedWorkspace.js';
+
+const hookThrowState = vi.hoisted(() => ({ shouldThrow: false }));
+vi.mock('../../src/hooks/useSmogPlan.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/hooks/useSmogPlan.js')>();
+  return {
+    ...actual,
+    useSmogPlan: (...args: Parameters<typeof actual.useSmogPlan>) => {
+      if (hookThrowState.shouldThrow) {
+        throw new Error('Simulated useSmogPlan failure');
+      }
+      return actual.useSmogPlan(...args);
+    },
+  };
+});
 
 beforeEach(() => {
   vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
@@ -16,6 +32,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  hookThrowState.shouldThrow = false;
   cleanup();
   vi.restoreAllMocks();
 });
@@ -69,10 +86,10 @@ describe('App WCAG 2.1 AA landmarks, labels & bilingual semantics', () => {
   });
 });
 
-function buildEvalJsonRes(body: unknown, status = 200): Response {
+function buildEvalJsonRes(body: unknown, status = 200, etag = '"v0"'): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', etag },
   });
 }
 
@@ -92,22 +109,30 @@ const EVAL_USER = {
 
 interface DelayedAuthHooks {
   readonly onSessionCheck?: () => Response;
+  readonly onPrefsPut?: (profile: unknown) => Promise<Response>;
   readonly onPrefsGet: () => Promise<Response>;
   readonly onLogout: () => Promise<Response>;
+}
+
+function handlePreferencesMock(
+  init: RequestInit | undefined,
+  hooks: DelayedAuthHooks,
+): Promise<Response> {
+  if (init?.method !== 'PUT') return hooks.onPrefsGet();
+  const parsed = typeof init.body === 'string' ? JSON.parse(init.body) : {};
+  return hooks.onPrefsPut?.(parsed.profile) ??
+    Promise.resolve(buildEvalJsonRes({ profile: parsed.profile ?? null }, 200, '"v1"'));
 }
 
 function createAuthFetchMock(hooks: DelayedAuthHooks) {
   return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = getRequestUrl(input);
     if (url.includes('/api/auth/session')) {
-      const sessionRes = hooks.onSessionCheck?.()
-        ?? buildEvalJsonRes({ authenticated: true, user: EVAL_USER });
-      return Promise.resolve(sessionRes);
+      return Promise.resolve(
+        hooks.onSessionCheck?.() ?? buildEvalJsonRes({ authenticated: true, user: EVAL_USER }),
+      );
     }
-    if (url.includes('/api/user/preferences')) {
-      if (init?.method === 'PUT') return Promise.resolve(buildEvalJsonRes({ profile: null }));
-      return hooks.onPrefsGet();
-    }
+    if (url.includes('/api/user/preferences')) return handlePreferencesMock(init, hooks);
     if (url.includes('/api/auth/logout')) return hooks.onLogout();
     if (url.includes('/api/auth/login')) return Promise.resolve(buildEvalJsonRes({ user: EVAL_USER }));
     return Promise.resolve(buildEvalJsonRes({ error: 'offline test mock' }, 503));
@@ -162,14 +187,20 @@ describe('App authenticated session lifecycle & landmarks', () => {
     expect(container.querySelector('#impact')).toBeNull();
   });
 
-  it('locks duplicate Sign Out clicks while logoutSession is pending and protects pre-hydration edits from delayed preferences GET', async () => {
+  it('locks duplicate Sign Out clicks, flushes pre-signout edits before logout, and protects pre-hydration edits', async () => {
     let resolvePrefs!: (res: Response) => void;
     let resolveLogout!: (res: Response) => void;
     let logoutCalls = 0;
+    let acknowledgeSave: (() => void) | undefined;
+    let savedProfile: unknown;
 
-    vi.spyOn(globalThis, 'fetch').mockImplementation(
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
       createAuthFetchMock({
         onPrefsGet: () => new Promise<Response>((r) => { resolvePrefs = r; }),
+        onPrefsPut: (profile) => new Promise((resolve) => {
+          savedProfile = profile;
+          acknowledgeSave = () => resolve(buildEvalJsonRes({ profile }, 200, '"v1"'));
+        }),
         onLogout: () => {
           logoutCalls += 1;
           return new Promise<Response>((r) => { resolveLogout = r; });
@@ -211,7 +242,16 @@ describe('App authenticated session lifecycle & landmarks', () => {
     const signOutBtn = screen.getByRole('button', { name: /Sign Out|लॉग आउट/i });
     fireEvent.click(signOutBtn);
     fireEvent.click(signOutBtn);
-    expect(logoutCalls).toBe(1);
+    await waitFor(() => expect(acknowledgeSave).toBeTypeOf('function'));
+    expect(logoutCalls).toBe(0);
+    expect(savedProfile).toMatchObject({ language: 'hi' });
+    await act(async () => acknowledgeSave?.());
+    await waitFor(() => expect(logoutCalls).toBe(1));
+    const preSignOutPuts = fetchSpy.mock.calls.filter(([input, init]) => {
+      return getRequestUrl(input).includes('/api/user/preferences') && init?.method === 'PUT';
+    });
+    expect(preSignOutPuts).toHaveLength(1);
+    expect(new Headers(preSignOutPuts[0]?.[1]?.headers).get('If-Match')).toBe('"v0"');
     resolveLogout(buildEvalJsonRes({ ok: true }));
     await waitFor(() => {
       expect(document.getElementById('gateway-login')).not.toBeNull();
@@ -250,5 +290,93 @@ describe('App authenticated session lifecycle & landmarks', () => {
       return getRequestUrl(input).includes('/api/user/preferences') && init?.method === 'PUT';
     });
     expect(putCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('blocks sign-out on conflict and explicitly reloads the saved revision', async () => {
+    let reads = 0;
+    const logout = vi.fn(() => Promise.resolve(buildEvalJsonRes({ ok: true })));
+    const serverProfile = { ...DEFAULT_PROFILE, householdSize: 7 };
+    const save = vi.fn(() => Promise.resolve(buildEvalJsonRes({ error: 'PREFS_CONFLICT' }, 409)));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(createAuthFetchMock({
+      onPrefsGet: async () => ++reads === 1
+        ? buildEvalJsonRes({ profile: null })
+        : buildEvalJsonRes({ profile: serverProfile }, 200, '"v2"'),
+      onPrefsPut: save,
+      onLogout: logout,
+    }));
+    render(<App />);
+    const size = await screen.findByLabelText(/Household Size/i);
+    fireEvent.change(size, { target: { value: '6' } });
+    fireEvent.click(screen.getByRole('button', { name: /Sign Out/i }));
+    const reload = await screen.findByRole('button', { name: 'Reload saved preferences' });
+    expect(screen.getByText(/still signed in/)).toHaveAttribute('role', 'alert');
+    expect(logout).not.toHaveBeenCalled();
+    expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ householdSize: 6 }));
+    fireEvent.click(reload);
+    await waitFor(() => expect(size).toHaveValue(7));
+    expect(save).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: /Sign Out/i }));
+    await waitFor(() => expect(logout).toHaveBeenCalledTimes(1));
+  });
+
+  it('surfaces visible retryable status notice when PUT /api/user/preferences fails', async () => {
+    let putAttempts = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = getRequestUrl(input);
+      if (url.includes('/api/auth/session')) {
+        return Promise.resolve(buildEvalJsonRes({ authenticated: true, user: EVAL_USER }));
+      }
+      if (url.includes('/api/user/preferences')) {
+        if (init?.method === 'PUT') {
+          putAttempts += 1;
+          if (putAttempts === 1) {
+            return Promise.resolve(buildEvalJsonRes({ error: 'SAVE_FAILED' }, 500));
+          }
+          const parsed = typeof init.body === 'string' ? JSON.parse(init.body) : {};
+          return Promise.resolve(buildEvalJsonRes({ profile: parsed.profile ?? null }, 200, '"v1"'));
+        }
+        return Promise.resolve(buildEvalJsonRes({ profile: null }));
+      }
+      if (url.includes('/api/auth/logout')) {
+        return Promise.resolve(buildEvalJsonRes({ ok: true }));
+      }
+      return Promise.resolve(buildEvalJsonRes({ error: 'offline test mock' }, 503));
+    });
+
+    const { container } = render(<App />);
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Household Size/i)).toBeInTheDocument();
+    });
+    expect(container.querySelector('svg polyline[stroke-dasharray="6 3"]')).not.toBeNull();
+    expect(document.body.textContent ?? '').toContain('Ventilation Eligible Hours');
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(screen.getByLabelText(/Household Size/i), { target: { value: '5' } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1100);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const retryBtn = await screen.findByRole('button', { name: /Retry Save/i });
+    expect(document.body.textContent ?? '').toContain('Could not save profile preferences.');
+
+    fireEvent.click(retryBtn);
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /Retry Save/i })).not.toBeInTheDocument();
+    });
+    expect(putAttempts).toBeGreaterThanOrEqual(2);
+  });
+
+  it('catches hook-level throws inside AuthenticatedWorkspace via outer ErrorBoundary', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    hookThrowState.shouldThrow = true;
+    render(<AuthenticatedWorkspace authUser={EVAL_USER} onSignOut={vi.fn()} />);
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent ?? '').toMatch(/recover|retry|view|display|समस्या/i);
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument();
   });
 });

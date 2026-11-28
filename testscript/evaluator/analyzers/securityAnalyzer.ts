@@ -5,6 +5,7 @@
  */
 
 import fs from 'node:fs';
+import type { Server } from 'node:http';
 import path from 'node:path';
 import { z } from 'zod';
 import type { AnalyzerResult, DeductionItem } from '../types.js';
@@ -148,12 +149,20 @@ async function runLiveServerProbes(rootDir: string, deductions: DeductionItem[])
     );
     return 8.0;
   }
-  const { server, port } = await startEphemeralServer(app);
+  let server: Server | null = null;
   try {
+    const started = await startEphemeralServer(app);
+    server = started.server;
+    const { port } = started;
     const p1 = await probeHeadersCorsRateLimit(port, deductions);
     const p2 = await probeInputAndSsrf(port, deductions);
     const p3 = await probePromptAttacks(port, deductions);
     return clamp(round2(p1 + p2 + p3), 0, 8.0);
+  } catch (err: unknown) {
+    const reason = err instanceof Error ? err.message : 'Unknown runtime probe error';
+    deductions.push(makeDeduction(CRITERION, 8, `Runtime security probes unavailable: ${reason}`,
+      'Run on a host permitting ephemeral loopback listeners.'));
+    return 8;
   } finally {
     await closeServerSafely(server);
   }

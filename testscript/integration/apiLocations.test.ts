@@ -112,6 +112,15 @@ describe('GET /api/locations/search', () => {
     expect(ssrfRes.status).toBe(400);
     expect(ssrfRes.body.error).toBe('INVALID_QUERY');
   });
+
+  it('supports Hindi Devanagari searches and marks degraded when upstream fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Open-Meteo down')));
+    const app = createApp();
+    const hiRes = await request(app).get(`/api/locations/search?q=${encodeURIComponent('दिल्ली')}`);
+    expect(hiRes.status).toBe(200);
+    expect(hiRes.body.degraded).toBe(true);
+    expect(hiRes.body.results.some((r: { id: string }) => r.id === 'delhi_anand_vihar')).toBe(true);
+  });
 });
 
 describe('GET /api/aqi pan-India coordinates, IST timestamps, and fallbacks', () => {

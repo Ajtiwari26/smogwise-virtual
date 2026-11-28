@@ -4,13 +4,17 @@
  */
 
 import { z } from 'zod';
-import { resolveCityPreset } from '../../src/domain/cityPresets.js';
+import {
+  MAX_FALLBACK_DISTANCE_KM,
+  resolveCityPreset,
+} from '../../src/domain/cityPresets.js';
 import { computeCpcbAqi } from '../../src/domain/cpcbAqi.js';
 import { round2 } from '../../src/domain/domainUtils.js';
 import type { CityPreset, LiveAqOverride } from '../../src/domain/types.js';
 import { createLruCache, createSingleflight, hashCacheKey } from '../cache/lruCache.js';
+import { logServerEvent } from '../config/logger.js';
 import { isUnsafeCityInput } from '../middleware/locationGuard.js';
-import { fetchBoundedJson } from './httpFetch.js';
+import { fetchBoundedJsonDetailed } from './httpFetch.js';
 import {
   buildLookupResult,
   buildNearestFallbackResult,
@@ -38,7 +42,6 @@ const OpenMeteoResponseSchema = z.object({
 const OPEN_METEO_ENDPOINT = 'https://air-quality-api.open-meteo.com/v1/air-quality';
 const FETCH_TIMEOUT_MS = 3500;
 const CACHE_TTL_MS = 15 * 60 * 1000;
-const MAX_FALLBACK_DISTANCE_KM = 50;
 
 /** Error thrown when live AQ lookup fails and no Indian preset exists within 50 km. */
 export class LiveAqUnavailableError extends Error {
@@ -85,6 +88,9 @@ function buildOpenMeteoUrl(lat: number, lon: number): string {
 function parseLiveAqPayload(payload: unknown): LiveAqOverride | null {
   const checked = OpenMeteoResponseSchema.safeParse(payload);
   if (!checked.success) {
+    logServerEvent('warn', 'open_meteo_schema_rejected', {
+      issueCount: checked.error.issues.length,
+    });
     return null;
   }
   const { pm2_5: pm25, pm10, nitrogen_dioxide: no2, time } = checked.data.current;
@@ -104,8 +110,11 @@ function parseLiveAqPayload(payload: unknown): LiveAqOverride | null {
 }
 
 async function fetchOpenMeteo(lat: number, lon: number): Promise<LiveAqSnapshot | null> {
-  const payload = await fetchBoundedJson(buildOpenMeteoUrl(lat, lon), FETCH_TIMEOUT_MS);
-  const liveAq = payload === null ? null : parseLiveAqPayload(payload);
+  const outcome = await fetchBoundedJsonDetailed(buildOpenMeteoUrl(lat, lon), FETCH_TIMEOUT_MS);
+  if (!outcome.ok) {
+    return null;
+  }
+  const liveAq = parseLiveAqPayload(outcome.data);
   return liveAq === null ? null : { liveAq, fetchedAt: new Date().toISOString() };
 }
 
@@ -115,13 +124,13 @@ function fetchSharedSnapshot(
   lat: number,
   lon: number,
 ): Promise<LiveAqSnapshot | null> {
-  return aqSingleflight.run(cacheKey, async () => {
+  return aqSingleflight.run(cacheKey, async (isCurrent) => {
     const snapshot = await fetchOpenMeteo(lat, lon);
-    if (snapshot !== null) {
+    if (snapshot !== null && isCurrent()) {
       cache.set(cacheKey, snapshot);
     }
     return snapshot;
-  });
+  }, () => null);
 }
 
 function buildLiveLookup(
@@ -130,7 +139,7 @@ function buildLiveLookup(
   cached: boolean,
 ): AirQualityLookupResult {
   const { liveAq, fetchedAt } = snapshot;
-  const pm25 = String(Math.round(liveAq.pm25));
+  const pm25 = String(liveAq.pm25);
   const result = buildLookupResult(city, {
     ...liveAq,
     sourceLabel: `Open-Meteo Live AQ (${city.name}: PM2.5 ${pm25} ug/m3)`,

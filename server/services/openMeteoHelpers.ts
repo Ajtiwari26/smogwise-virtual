@@ -3,20 +3,27 @@
  * fallback selection, and AirQualityLookupResult construction.
  */
 
-import { CITY_PRESETS } from '../../src/domain/cityPresets.js';
+import {
+  findNearestCityPresetWithDistance,
+  haversineKm,
+} from '../../src/domain/cityPresets.js';
 import { computeCpcbAqi } from '../../src/domain/cpcbAqi.js';
+import { applyLiveAqOverride, buildObservationId } from '../../src/domain/liveAqResolver.js';
 import { round4 } from '../../src/domain/domainUtils.js';
 import type {
   AqiBandId,
+  AqResolutionStatus,
   CityPreset,
   DominantPollutant,
   LiveAqOverride,
 } from '../../src/domain/types.js';
 import { sanitizeLocationText } from '../middleware/locationGuard.js';
 
-const EARTH_RADIUS_KM = 6371;
 const SHORT_ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const FULL_NAIVE_ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/;
+
+/** Re-exported shared Haversine distance helper in kilometers. */
+export { haversineKm };
 
 /** Input coordinates and optional display labels for custom-location AQ lookups. */
 export interface CoordinateAqInput {
@@ -29,6 +36,8 @@ export interface CoordinateAqInput {
 /** Result returned by the Open-Meteo air-quality client. */
 export interface AirQualityLookupResult {
   readonly city: CityPreset;
+  readonly aqStatus: AqResolutionStatus;
+  readonly observationId: string;
   readonly dataSource: 'live_open_meteo' | 'city_preset';
   readonly cpcbAqi: number;
   readonly aqiBand: AqiBandId;
@@ -59,39 +68,12 @@ export function normalizeObservedAt(raw?: string): string | undefined {
   return Number.isFinite(Date.parse(candidate)) ? candidate : undefined;
 }
 
-function toRadians(deg: number): number {
-  return (deg * Math.PI) / 180;
-}
-
-/** Computes Haversine great-circle distance in kilometers between two coordinates. */
-export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const dLat = toRadians(lat2 - lat1);
-  const dLon = toRadians(lon2 - lon1);
-  const rawA =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
-  const clampedA = Math.min(1, Math.max(0, rawA));
-  return 2 * EARTH_RADIUS_KM * Math.atan2(Math.sqrt(clampedA), Math.sqrt(1 - clampedA));
-}
-
 /** Finds the nearest Indian city preset and its Haversine distance in kilometers. */
 export function findNearestIndianPreset(lat: number, lon: number): {
   readonly preset: CityPreset;
   readonly distanceKm: number;
 } {
-  let nearestPreset: CityPreset | undefined;
-  let minDistance = Number.POSITIVE_INFINITY;
-  for (const preset of CITY_PRESETS) {
-    const dist = haversineKm(lat, lon, preset.lat, preset.lon);
-    if (dist < minDistance) {
-      minDistance = dist;
-      nearestPreset = preset;
-    }
-  }
-  if (nearestPreset === undefined) {
-    throw new Error('CITY_PRESETS must contain at least one preset.');
-  }
-  return { preset: nearestPreset, distanceKm: minDistance };
+  return findNearestCityPresetWithDistance(lat, lon);
 }
 
 /** Builds a synthetic CityPreset for a custom map coordinate anchored to the nearest station. */
@@ -110,8 +92,8 @@ export function buildSyntheticCityPreset(
     name: displayName,
     nameHi: displayName,
     state: displayState,
-    lat,
-    lon,
+    lat: input.lat,
+    lon: input.lon,
     baselinePm25: nearestPreset.baselinePm25,
     baselinePm10: nearestPreset.baselinePm10,
     baselineNo2: nearestPreset.baselineNo2,
@@ -143,14 +125,23 @@ export function buildLookupResult(
   city: CityPreset,
   liveAq: LiveAqOverride | null,
 ): AirQualityLookupResult {
-  const pm25 = liveAq?.pm25 ?? city.baselinePm25;
-  const pm10 = liveAq !== null ? liveAq.pm10 : city.baselinePm10;
-  const no2 = liveAq !== null ? liveAq.no2 : city.baselineNo2;
-  const dataSource = liveAq !== null ? 'live_open_meteo' : 'city_preset';
+  if (liveAq === null) {
+    return {
+      ...buildBaseLookupFields(
+        city, city.baselinePm25, city.baselinePm10, city.baselineNo2, 'city_preset',
+      ),
+      aqStatus: 'nearby_proxy',
+      observationId: buildObservationId(city, 'nearby_proxy'),
+    };
+  }
+  const effectiveCity = applyLiveAqOverride(city, liveAq).city;
+  const { pm25, pm10, no2, observedAt } = liveAq;
   return {
-    ...buildBaseLookupFields(city, pm25, pm10, no2, dataSource),
-    ...(liveAq?.observedAt !== undefined ? { observedAt: liveAq.observedAt } : {}),
-    ...(liveAq !== null ? { liveAq } : {}),
+    ...buildBaseLookupFields(city, pm25, pm10, no2, 'live_open_meteo'),
+    aqStatus: 'live',
+    observationId: buildObservationId(effectiveCity, 'live', observedAt),
+    ...(observedAt !== undefined ? { observedAt } : {}),
+    liveAq,
   };
 }
 
@@ -168,9 +159,11 @@ export function buildNearestFallbackResult(
     sourceLabel:
       `Nearest station fallback: ${nearestPreset.name} (${String(Math.round(distanceKm))} km away)`,
     fallbackStationName: nearestPreset.name,
-    fallbackDistanceKm: roundedDist,
+    fallbackDistanceKm: distanceKm,
   };
   return {
+    aqStatus: 'nearby_proxy',
+    observationId: buildObservationId(syntheticCity, 'nearby_proxy'),
     ...buildBaseLookupFields(
       syntheticCity,
       nearestPreset.baselinePm25,

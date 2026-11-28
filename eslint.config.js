@@ -46,6 +46,7 @@ export default tseslint.config(
     files: ['src/**/*.{ts,tsx}', 'server/**/*.ts', 'api/**/*.ts'],
     rules: {
       'no-console': 'error',
+      '@typescript-eslint/consistent-type-assertions': ['error', { assertionStyle: 'never' }],
     },
   },
   {

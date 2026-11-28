@@ -3,19 +3,13 @@
  * and SSRF/injection detection helpers for location queries and identifiers.
  */
 
-/** Balanced character class for safe city names (no escaped brackets). */
-export const SAFE_CITY_RE = /^[\p{L}\p{N} .\-()]{1,64}$/u;
+/** Balanced character class for safe Unicode city names including Devanagari/Indic marks. */
+export const SAFE_CITY_RE = /^[\p{L}\p{N}(][\p{L}\p{M}\p{N} .\-()]{0,63}$/u;
 
-/** Balanced character class for canonical preset IDs (allows underscore). */
-export const SAFE_CITY_ID_RE = /^[\p{L}\p{N}_ .\-()]{2,64}$/u;
+/** Balanced character class for canonical preset IDs including combining marks & underscores. */
+export const SAFE_CITY_ID_RE = /^[\p{L}\p{N}(][\p{L}\p{M}\p{N}_ .\-()]{1,63}$/u;
 
-const CITATION_PREFIXES = [
-  '[CALC:',
-  '[SCI:',
-  '[AQ:',
-  '[POLICY:',
-  '[PRESET:',
-] as const;
+const CITATION_PREFIX_RE = /\s*(?:CALC|SCI|AQ|POLICY|PRESET)\s*:/iy;
 
 const UNSAFE_CHARS = new Set(['<', '>', '[', ']', '{', '}', '\\', ';', '|']);
 
@@ -50,37 +44,48 @@ export function stripZeroWidthAndBidi(raw: string): string {
   return out;
 }
 
-/**
- * Strips structured citation tags such as `[CALC:...]`, `[SCI:...]`, `[AQ:...]`,
- * `[POLICY:...]`, or `[PRESET:...]` without using escaped bracket regex literals.
- */
-export function stripCitationTags(raw: string): string {
-  let result = raw;
-  let searchFrom = 0;
-
-  while (searchFrom < result.length) {
-    const openIdx = result.indexOf('[', searchFrom);
-    if (openIdx === -1) {
-      break;
-    }
-    const closeIdx = result.indexOf(']', openIdx + 1);
-    if (closeIdx === -1) {
-      break;
-    }
-
-    const segment = result.slice(openIdx, closeIdx + 1);
-    const upperSegment = segment.toUpperCase();
-    const isCitation = CITATION_PREFIXES.some((prefix) => upperSegment.startsWith(prefix));
-
-    if (isCitation) {
-      result = `${result.slice(0, openIdx)} ${result.slice(closeIdx + 1)}`;
-      searchFrom = openIdx;
-    } else {
-      searchFrom = closeIdx + 1;
+/** Visits innermost bracket tags in a single scan of the input. */
+export function scanBracketTags(
+  text: string,
+  visit: (key: string, start: number, end: number) => void,
+): void {
+  let start = -1;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '[') start = i;
+    if (text[i] === ']' && start >= 0) {
+      visit(text.slice(start + 1, i), start, i + 1);
+      start = -1;
     }
   }
+}
 
-  return result;
+/** Removes citation-shaped bracket tags unless their exact key is allowlisted. */
+export function stripCitationTags(raw: string, allowed?: ReadonlySet<string>): string {
+  const chunks: string[] = [];
+  let cursor = 0;
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] !== '[') continue;
+    CITATION_PREFIX_RE.lastIndex = i + 1;
+    if (!CITATION_PREFIX_RE.test(raw)) continue;
+    const end = skipCitation(raw, i + 1);
+    const key = raw.slice(i + 1, end);
+    if (end === raw.length || !allowed?.has(key)) {
+      chunks.push(raw.slice(cursor, i), ' ');
+      cursor = end + 1;
+    }
+    i = end;
+  }
+  return chunks.length === 0 ? raw : chunks.join('') + raw.slice(cursor);
+}
+
+function skipCitation(raw: string, start: number): number {
+  let depth = 1;
+  for (let i = start; i < raw.length; i++) {
+    if (raw[i] === '[') depth += 1;
+    if (raw[i] === ']') depth -= 1;
+    if (depth === 0) return i;
+  }
+  return raw.length;
 }
 
 /**
@@ -90,7 +95,7 @@ export function sanitizeLocationText(raw: string): string {
   const normalized = stripZeroWidthAndBidi(raw.normalize('NFKC'));
   const withoutTags = stripCitationTags(normalized);
   return withoutTags
-    .replace(/[^\p{L}\p{N} .\-()]/gu, ' ')
+    .replace(/[^\p{L}\p{M}\p{N} .\-()]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 64);
@@ -108,6 +113,8 @@ export function escapeXml(value: string): string {
     .replace(/\x27/g, '&apos;');
 }
 
+const EXCESS_COMBINING_MARKS_RE = /\p{M}{4,}/u;
+
 /**
  * Detects URLs, private/metadata SSRF targets, control characters, and delimiters.
  */
@@ -120,7 +127,7 @@ export function isUnsafeLocationQuery(raw: string): boolean {
       return true;
     }
   }
-  return UNSAFE_QUERY_RE.test(normalized);
+  return EXCESS_COMBINING_MARKS_RE.test(normalized) || UNSAFE_QUERY_RE.test(normalized);
 }
 
 /**

@@ -446,4 +446,18 @@ describe('liveAqResolver, customLocation state, RWA 0-savings notice, and what-i
     expect(isSameLocationTarget(customA, BASE_PROFILE)).toBe(false);
     expect(resolveBaseCity(customA).state.length).toBeGreaterThan(0);
   });
+
+  it('produces zero delta when comparing an identical live profile against its own report', async () => {
+    const { compareWhatIfFromBaseline } = await import('../../src/domain/impactService.js');
+    const liveReport = computeDeterministicReport(BASE_PROFILE, {
+      pm25: 250, pm10: 340, no2: 65, observedAt: '2026-11-28T08:00',
+    });
+    const identical = compareWhatIfFromBaseline(BASE_PROFILE, liveReport, BASE_PROFILE);
+    expect(identical.delta).toEqual({
+      doseReductionUgPerDay: 0,
+      co2eAvoidedGramsPerDay: 0,
+      pm25AvoidedMgPerDay: 0,
+      monthlyNetSavingsInr: 0,
+    });
+  });
 });

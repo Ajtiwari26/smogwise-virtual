@@ -26,6 +26,7 @@ import {
   isPrefsPutPayload,
   isSessionPayload,
   isWhatIfPayload,
+  type LocationSearchResponse,
   type PlanBriefingApiResponse,
   type RecordValidator,
 } from './apiTypes.js';
@@ -92,6 +93,22 @@ function buildRequestInit(method: string, payload?: unknown, signal?: AbortSigna
   };
 }
 
+const responseEtags = new WeakMap<object, string>();
+
+/** Returns the HTTP ETag header recorded for an API JSON response object, if present. */
+export function readResponseEtag(payload: object): string | undefined {
+  return responseEtags.get(payload);
+}
+
+async function readJsonResponse(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') throw err;
+    throw new ApiError('Expected a JSON response from the server.', response.status, 'INVALID_JSON');
+  }
+}
+
 async function requestJson<T extends object>(
   url: string,
   init: RequestInit,
@@ -106,12 +123,16 @@ async function requestJson<T extends object>(
   if (!response.ok) {
     throw await parseApiError(response);
   }
-  const data: unknown = await response.json();
+  const data = await readJsonResponse(response);
   if (!isPlainRecord(data)) {
     throw new ApiError('Unexpected non-object response from server.', response.status);
   }
   if (!validate(data)) {
     throw new ApiError('Unexpected response shape from server.', response.status);
+  }
+  const etag = response.headers.get('etag');
+  if (etag !== null && etag.length > 0) {
+    responseEtags.set(data, etag);
   }
   return data;
 }
@@ -144,12 +165,38 @@ export async function fetchUserPreferences(
   return requestJson('/api/user/preferences', buildRequestInit('GET', undefined, signal), isPrefsGetPayload, true);
 }
 
-/** Saves user profile preferences via PUT /api/user/preferences. */
+/** Saves user profile preferences via PUT /api/user/preferences with required If-Match ETag. */
 export async function saveUserPreferences(
   profile: UserProfile,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  expectedEtag: string,
 ): Promise<{ readonly profile: UserProfile }> {
-  return requestJson('/api/user/preferences', buildRequestInit('PUT', { profile }, signal), isPrefsPutPayload, true);
+  if (expectedEtag.trim().length === 0) {
+    throw new ApiError('Missing ETag validator for preference update.', 400, 'INVALID_IF_MATCH');
+  }
+  const baseInit = buildRequestInit('PUT', { profile }, signal);
+  const init: RequestInit = { ...baseInit, headers: { 'If-Match': expectedEtag } };
+  return requestJson('/api/user/preferences', init, isPrefsPutPayload, true);
+}
+
+const degradedSearchArrays = new WeakSet<readonly LocationSearchItem[]>();
+
+/** Returns true when searchLocations results came from offline degraded preset fallback. */
+export function isSearchResultDegraded(results: readonly LocationSearchItem[]): boolean {
+  return degradedSearchArrays.has(results);
+}
+
+/** Searches Indian cities and localities via GET /api/locations/search with degraded flag. */
+export async function searchLocationsDetailed(
+  query: string,
+  signal?: AbortSignal,
+): Promise<LocationSearchResponse> {
+  const encoded = encodeURIComponent(query);
+  return requestJson(
+    `/api/locations/search?q=${encoded}`,
+    buildRequestInit('GET', undefined, signal),
+    isLocationSearchPayload,
+  );
 }
 
 /** Searches Indian cities and localities via GET /api/locations/search. */
@@ -157,12 +204,10 @@ export async function searchLocations(
   query: string,
   signal?: AbortSignal,
 ): Promise<readonly LocationSearchItem[]> {
-  const encoded = encodeURIComponent(query);
-  const data = await requestJson(
-    `/api/locations/search?q=${encoded}`,
-    buildRequestInit('GET', undefined, signal),
-    isLocationSearchPayload,
-  );
+  const data = await searchLocationsDetailed(query, signal);
+  if (data.degraded === true) {
+    degradedSearchArrays.add(data.results);
+  }
   return data.results;
 }
 
@@ -194,20 +239,24 @@ export async function fetchAqiByCoords(
 export async function postPlan(
   profile: UserProfile,
   signal?: AbortSignal,
+  snapshotToken?: string,
 ): Promise<FullPlanOutput> {
-  return requestJson(
-    '/api/plan',
-    buildRequestInit('POST', profile, signal),
-    isFullPlanPayload,
-  );
+  const payload = snapshotToken === undefined ? profile : { profile, snapshotToken };
+  return requestJson('/api/plan', buildRequestInit('POST', payload, signal), isFullPlanPayload);
 }
 
 /** Synthesizes a grounded household action briefing via POST /api/plan/briefing. */
 export async function postPlanBriefing(
   profile: UserProfile,
   signal?: AbortSignal,
+  snapshotToken?: string,
 ): Promise<PlanBriefingApiResponse> {
-  return requestJson('/api/plan/briefing', buildRequestInit('POST', profile, signal), isBriefingPayload);
+  const payload = snapshotToken === undefined ? profile : { profile, snapshotToken };
+  return requestJson(
+    '/api/plan/briefing',
+    buildRequestInit('POST', payload, signal),
+    isBriefingPayload,
+  );
 }
 
 /** Compares baseline and alternative profiles via POST /api/what-if. */
@@ -228,6 +277,10 @@ export async function postAiAsk(
   question: string,
   profile: UserProfile,
   signal?: AbortSignal,
+  snapshotToken?: string,
 ): Promise<AiAskApiResponse> {
-  return requestJson('/api/ai/ask', buildRequestInit('POST', { question, profile }, signal), isAiAskPayload);
+  const payload = snapshotToken === undefined
+    ? { question, profile }
+    : { question, profile, snapshotToken };
+  return requestJson('/api/ai/ask', buildRequestInit('POST', payload, signal), isAiAskPayload);
 }

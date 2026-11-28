@@ -25,20 +25,28 @@ function BannerBadgesRow({
   model,
   pollutantSummary,
 }: BannerBadgesRowProps): React.ReactElement {
-  const { isHi, resolvedAqi, resolvedDominant, band, sourceLabel } = model;
+  const { isHi, aqStatus, resolvedAqi, resolvedDominant, band, sourceLabel } = model;
+  const showReadings = aqStatus === 'live' || aqStatus === 'nearby_proxy';
+  const badgeText = showReadings
+    ? `CPCB AQI ${resolvedAqi} · ${isHi ? band.labelHi : band.label}`
+    : (isHi ? `CPCB AQI ${band.labelHi}` : `CPCB AQI ${band.label}`);
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <span className={`rounded px-2.5 py-0.5 text-xs font-bold ${band.badgeClass}`}>
-          CPCB AQI {resolvedAqi} · {isHi ? band.labelHi : band.label}
+          {badgeText}
         </span>
-        <span className="rounded border border-slate-500 bg-white px-2 py-0.5 text-xs font-semibold text-slate-900">
-          {isHi ? 'प्रमुख प्रदूषक' : 'Dominant'}: {resolvedDominant}
-        </span>
-        <span className="rounded border border-slate-500 bg-white px-2 py-0.5 text-xs font-semibold text-slate-900">
-          {city.grapStage.replace('_', ' ')}
-        </span>
+        {showReadings && (
+          <>
+            <span className="rounded border border-slate-500 bg-white px-2 py-0.5 text-xs font-semibold text-slate-900">
+              {isHi ? 'प्रमुख प्रदूषक' : 'Dominant'}: {resolvedDominant}
+            </span>
+            <span className="rounded border border-slate-500 bg-white px-2 py-0.5 text-xs font-semibold text-slate-900">
+              {city.grapStage.replace('_', ' ')}
+            </span>
+          </>
+        )}
         <span className="rounded bg-slate-900 px-2 py-0.5 text-xs font-semibold text-white">
           {sourceLabel}
         </span>
@@ -59,9 +67,11 @@ export const SmogAlertBanner: React.FC<SmogAlertBannerProps> = React.memo(
     const pollutantSummary = formatPollutantSummary({
       city,
       dataSource,
+      aqStatus: model.aqStatus,
       livePm10,
       liveNo2,
       istTime: model.istTime,
+      isHi: model.isHi,
     });
 
     return (

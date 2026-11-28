@@ -9,8 +9,9 @@ import { CITY_PRESETS, isWithinIndiaCoords } from '../../src/domain/cityPresets.
 import { round2 } from '../../src/domain/domainUtils.js';
 import type { LocationSearchItem } from '../../src/domain/types.js';
 import { createLruCache, createSingleflight, hashCacheKey } from '../cache/lruCache.js';
+import { logServerEvent } from '../config/logger.js';
 import { sanitizeLocationText } from '../middleware/locationGuard.js';
-import { fetchBoundedJson } from './httpFetch.js';
+import { fetchBoundedJsonDetailed } from './httpFetch.js';
 
 const OPEN_METEO_GEO_ENDPOINT = 'https://geocoding-api.open-meteo.com/v1/search';
 const FETCH_TIMEOUT_MS = 3500;
@@ -75,6 +76,7 @@ function mapRawResult(raw: z.infer<typeof GeocodingRawItemSchema>): LocationSear
 function parseGeocodingPayload(payload: unknown): readonly LocationSearchItem[] | null {
   const parsed = GeocodingResponseSchema.safeParse(payload);
   if (!parsed.success) {
+    logServerEvent('warn', 'geocoding_schema_rejected', { issueCount: parsed.error.issues.length });
     return null;
   }
   const mapped: LocationSearchItem[] = [];
@@ -94,8 +96,9 @@ function searchCuratedIndianPresets(cleanQuery: string): readonly LocationSearch
   const matches: LocationSearchItem[] = [];
   for (const preset of CITY_PRESETS) {
     const hayName = preset.name.toLowerCase();
+    const hayNameHi = preset.nameHi.toLowerCase();
     const hayState = preset.state.toLowerCase();
-    if (hayName.includes(needle) || hayState.includes(needle)) {
+    if (hayName.includes(needle) || hayNameHi.includes(needle) || hayState.includes(needle)) {
       matches.push({
         id: preset.id,
         name: preset.name,
@@ -111,32 +114,50 @@ function searchCuratedIndianPresets(cleanQuery: string): readonly LocationSearch
 async function fetchOpenMeteoGeocoding(
   cleanQuery: string,
 ): Promise<readonly LocationSearchItem[] | null> {
-  const payload = await fetchBoundedJson(buildGeocodingUrl(cleanQuery), FETCH_TIMEOUT_MS);
-  if (payload === null) {
+  const outcome = await fetchBoundedJsonDetailed(buildGeocodingUrl(cleanQuery), FETCH_TIMEOUT_MS);
+  if (!outcome.ok) {
     return null;
   }
-  return parseGeocodingPayload(payload);
+  return parseGeocodingPayload(outcome.data);
+}
+
+/** Detailed Indian geocoding response preserving whether upstream lookup degraded. */
+export interface DetailedLocationSearch {
+  readonly results: readonly LocationSearchItem[];
+  readonly degraded: boolean;
+}
+
+/** Searches Indian cities and reports when remote geocoding fell back due to failure. */
+export async function searchIndianLocationsDetailed(
+  query: string,
+): Promise<DetailedLocationSearch> {
+  const cleanQuery = sanitizeLocationText(query);
+  if (cleanQuery.length < 2) {
+    return { results: [], degraded: false };
+  }
+  const cacheKey = hashCacheKey({ service: 'open-meteo-geo', q: normalizeQueryKey(cleanQuery) });
+  const cached = geoCache.get(cacheKey);
+  const results = cached ?? await geoSingleflight.run(cacheKey, async (isCurrent) => {
+    const remoteResults = await fetchOpenMeteoGeocoding(cleanQuery);
+    if (remoteResults !== null && isCurrent()) {
+      geoCache.set(cacheKey, remoteResults);
+    }
+    return remoteResults;
+  }, () => null);
+  if (results !== null && results.length > 0) {
+    return { results, degraded: false };
+  }
+  return {
+    results: searchCuratedIndianPresets(cleanQuery),
+    degraded: results === null,
+  };
 }
 
 /** Searches Indian cities via Open-Meteo Geocoding with 24h LRU & singleflight caching. */
 export async function searchIndianLocations(
   query: string,
 ): Promise<readonly LocationSearchItem[]> {
-  const cleanQuery = sanitizeLocationText(query);
-  if (cleanQuery.length < 2) {
-    return [];
-  }
-  const cacheKey = hashCacheKey({ service: 'open-meteo-geo', q: normalizeQueryKey(cleanQuery) });
-  const results = geoCache.get(cacheKey) ?? await geoSingleflight.run(cacheKey, async () => {
-    const remoteResults = await fetchOpenMeteoGeocoding(cleanQuery);
-    if (remoteResults !== null) {
-      geoCache.set(cacheKey, remoteResults);
-    }
-    return remoteResults;
-  });
-  return results !== null && results.length > 0
-    ? results
-    : searchCuratedIndianPresets(cleanQuery);
+  return (await searchIndianLocationsDetailed(query)).results;
 }
 
 /** Clears the in-memory geocoding LRU cache and in-flight map. */

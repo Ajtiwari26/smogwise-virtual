@@ -6,6 +6,7 @@ import { isPlainRecord } from '../domain/domainUtils.js';
 import { IAQ_HACK_IDS, LANGUAGE_CODES } from '../domain/types.js';
 import type {
   AqiBandId,
+  AqResolutionStatus,
   CityPreset,
   DeterministicReport,
   DominantPollutant,
@@ -20,6 +21,7 @@ import type {
 import {
   hasNumbers,
   hasOptionalNumbers,
+  hasOptionalStrings,
   hasStrings,
   isAqMetadata,
   isAuthUser,
@@ -71,11 +73,14 @@ export interface AqiApiResponse {
   readonly fallbackStationName?: string;
   readonly fallbackDistanceKm?: number;
   readonly liveAq?: LiveAqOverride;
+  readonly aqStatus?: AqResolutionStatus;
+  readonly observationId?: string;
 }
 
 /** Response payload returned by GET /api/locations/search. */
 export interface LocationSearchResponse {
   readonly results: readonly LocationSearchItem[];
+  readonly degraded?: boolean;
 }
 
 /** Response payload returned by POST /api/plan/briefing. */
@@ -86,6 +91,9 @@ export interface PlanBriefingApiResponse {
   readonly language: LanguageCode;
   readonly mode: 'gemini_interactions' | 'offline_grounded';
   readonly citationsUsed: readonly string[];
+  readonly modelUsed?: string;
+  readonly aqStatus?: AqResolutionStatus;
+  readonly observationId?: string;
 }
 
 /** Response payload returned by POST /api/ai/ask. */
@@ -95,6 +103,8 @@ export interface AiAskApiResponse {
   readonly mode: 'gemini_interactions' | 'offline_grounded' | 'guard_refusal';
   readonly citationsUsed: readonly string[];
   readonly guardTriggered: boolean;
+  readonly modelUsed?: string;
+  readonly snapshotToken?: string;
   readonly report: DeterministicReport;
 }
 
@@ -145,7 +155,8 @@ export const isPrefsPutPayload: RecordValidator<{ readonly profile: UserProfile 
 export const isLocationSearchPayload: RecordValidator<LocationSearchResponse> = (
   payload,
 ): payload is Record<string, unknown> & LocationSearchResponse =>
-  isRecordArray(payload['results'], isLocationItem);
+  isRecordArray(payload['results'], isLocationItem) &&
+  (payload['degraded'] === undefined || typeof payload['degraded'] === 'boolean');
 
 /** Validates GET /api/aqi response envelope. */
 export const isAqiPayload: RecordValidator<AqiApiResponse> = (
@@ -153,6 +164,7 @@ export const isAqiPayload: RecordValidator<AqiApiResponse> = (
 ): payload is Record<string, unknown> & AqiApiResponse =>
   isValidCity(payload['city']) &&
   isAqMetadata(payload) &&
+  isAqStatusField(payload['aqStatus']) &&
   isTimestamp(payload['fetchedAt']) &&
   (payload['cached'] === undefined || typeof payload['cached'] === 'boolean') &&
   (payload['liveAq'] === undefined || isLiveAq(payload['liveAq']));
@@ -187,7 +199,10 @@ export const isBriefingPayload: RecordValidator<PlanBriefingApiResponse> = (
 ): payload is Record<string, unknown> & PlanBriefingApiResponse =>
   hasStrings(payload, 'headline', 'summary') &&
   isStringArray(payload['whyActions']) &&
+  hasOptionalStrings(payload, 'observationId') &&
+  isAqStatusField(payload['aqStatus']) &&
   hasAdvisoryMetadata(payload) &&
+  (payload['modelUsed'] === undefined || typeof payload['modelUsed'] === 'string') &&
   isOneOf(payload['mode'], ['gemini_interactions', 'offline_grounded']);
 
 /** Validates POST /api/ai/ask response envelope. */
@@ -197,6 +212,7 @@ export const isAiAskPayload: RecordValidator<AiAskApiResponse> = (
   typeof payload['answer'] === 'string' &&
   typeof payload['guardTriggered'] === 'boolean' &&
   hasAdvisoryMetadata(payload) &&
+  hasOptionalStrings(payload, 'modelUsed', 'snapshotToken') &&
   isOneOf(payload['mode'], ['gemini_interactions', 'offline_grounded', 'guard_refusal']) &&
   isValidReportEnvelope(payload['report']);
 
@@ -221,6 +237,10 @@ function isValidEmissions(value: unknown): boolean {
       'communityCo2eAvoidedKgPerMonth', 'communityPm25AvoidedGramsPerMonth');
 }
 
+function isAqStatusField(value: unknown): boolean {
+  return value === undefined || isOneOf(value, ['live', 'nearby_proxy', 'pending', 'unavailable']);
+}
+
 function isValidReportEnvelope(value: unknown): boolean {
   return isPlainRecord(value) &&
     isValidCity(value['city']) &&
@@ -228,6 +248,7 @@ function isValidReportEnvelope(value: unknown): boolean {
     isValidEmissions(value['emissions']) &&
     isCitationRecord(value['citations']) &&
     isAqMetadata(value) &&
+    isAqStatusField(value['aqStatus']) &&
     hasOptionalNumbers(value, 'livePm10', 'liveNo2') &&
     isIaqHackList(value['recommendedHacks']);
 }
@@ -255,6 +276,7 @@ export const isFullPlanPayload: RecordValidator<FullPlanOutput> = (
   isRecordArray(payload['routine'], isRoutineBlock) &&
   isRecordArray(payload['iaqHacks'], isIaqHack) &&
   hasStrings(payload, 'localizedSummary', 'rwaNotice') &&
+  hasOptionalStrings(payload, 'snapshotToken') &&
   isCitationRecord(payload['citations']);
 
 function isValidDelta(value: unknown): boolean {

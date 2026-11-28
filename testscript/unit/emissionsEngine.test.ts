@@ -1,3 +1,5 @@
+import { buildRwaNotice } from '../../src/domain/i18n.js';
+import { computeFullPlan } from '../../src/domain/impactService.js';
 import { describe, expect, it } from 'vitest';
 import {
   computeEmissionsMetrics,
@@ -48,6 +50,21 @@ describe('emissionsEngine commute & cooking deltas', () => {
 
     expect(induction.co2eGramsPerDay).toBeLessThan(biomass.co2eGramsPerDay);
     expect(induction.pm25MgPerDay).toBeLessThan(biomass.pm25MgPerDay);
+  });
+
+  it('preserves signed negative deltas when profile increases emissions vs baseline', () => {
+    const worse = computeEmissionsMetrics(
+      makeProfile({
+        commuteMode: 'petrol_car',
+        commuteDistanceKm: 30,
+        cookingFuel: 'biomass_chulha',
+        activeHacks: ['hepa_purifier'],
+      }),
+    );
+    expect(worse.co2eAvoidedGramsPerDay).toBeLessThan(0);
+    expect(worse.pm25AvoidedMgPerDay).toBeLessThan(0);
+    expect(worse.monthlyNetSavingsInr).toBeLessThan(0);
+    expect(worse.communityCo2eAvoidedKgPerMonth).toBeLessThan(0);
   });
 
   it('handles zero commute distance cleanly without NaN or negative avoidance', () => {
@@ -136,4 +153,28 @@ describe('emissionsEngine budget ranking & RWA scaling', () => {
     expect(Number.isFinite(fallbackRaw.co2eGramsPerDay)).toBe(true);
     expect(fallbackRaw.monthlyOperatingCostInr).toBeGreaterThan(0);
   });
+});
+
+it('uses 22 commute days and 30 cooking days for monthly community emissions', () => {
+  const metrics = computeEmissionsMetrics(makeProfile({
+    commuteDistanceKm: 10, commuteMode: 'metro_bus', cookingFuel: 'biomass_chulha',
+    rwaHouseholds: 100, rwaAdoptionRate: 1,
+  }));
+  expect(metrics.co2eAvoidedGramsPerDay).toBe(-950);
+  expect(metrics.communityCo2eAvoidedKgPerMonth).toBe(-4130);
+  expect(metrics.communityPm25AvoidedGramsPerMonth).toBe(-2948);
+});
+
+it('formats independent pollutant directions in a mixed-sign community notice', () => {
+  const profile = makeProfile({ rwaHouseholds: 180, rwaAdoptionRate: 0.55 });
+  const { report } = computeFullPlan(profile);
+  const emissions = {
+    ...report.emissions,
+    communityCo2eAvoidedKgPerMonth: 2089.8,
+    communityPm25AvoidedGramsPerMonth: -963.9,
+  };
+  const en = buildRwaNotice(profile, { ...report, emissions });
+  const hi = buildRwaNotice({ ...profile, language: 'hi' }, { ...report, emissions });
+  expect(en).toContain('+2089.8 kg CO2e avoided and +963.9 g PM2.5 added');
+  expect(hi).toContain('2089.8 kg CO2e कम और 963.9 g PM2.5 अधिक');
 });

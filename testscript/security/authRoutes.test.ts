@@ -155,14 +155,30 @@ describe('Authenticated session, user preference isolation & logout', () => {
       .send({ profile: { invalid: true } });
     expect(badPut.status).toBe(400);
 
+    const initialGet = await request(app).get('/api/user/preferences').set('Cookie', cookieOne);
+    expect(initialGet.status).toBe(200);
+    expect(initialGet.headers['etag']).toBe('"v0"');
+    expect(initialGet.body).toEqual({ profile: null });
+
     const putRes = await request(app)
       .put('/api/user/preferences')
       .set('Cookie', cookieOne)
+      .set('If-Match', '"v0"')
       .send({ profile: SAMPLE_PROFILE });
     expect(putRes.status).toBe(200);
+    expect(putRes.headers['etag']).toBe('"v1"');
+
+    const stalePut = await request(app)
+      .put('/api/user/preferences')
+      .set('Cookie', cookieOne)
+      .set('If-Match', '"v0"')
+      .send({ profile: { ...SAMPLE_PROFILE, householdSize: 6 } });
+    expect(stalePut.status).toBe(409);
+    expect(stalePut.body).toMatchObject({ error: 'PREFS_CONFLICT' });
 
     const getOne = await request(app).get('/api/user/preferences').set('Cookie', cookieOne);
     expect(getOne.status).toBe(200);
+    expect(getOne.headers['etag']).toBe('"v1"');
     expect(getOne.body).toEqual({ profile: SAMPLE_PROFILE });
 
     const loginTwo = await request(app)
@@ -172,6 +188,16 @@ describe('Authenticated session, user preference isolation & logout', () => {
     const getTwo = await request(app).get('/api/user/preferences').set('Cookie', cookieTwo);
     expect(getTwo.status).toBe(200);
     expect(getTwo.body).toEqual({ profile: null });
+
+    const secondVisitorSameAccount = await request(app)
+      .post('/api/auth/login')
+      .send({ email: 'family.eval@smogwise.in', password: VALID_PASSWORD });
+    const cookieVisitorTwo = extractCookiePair(secondVisitorSameAccount.headers['set-cookie']);
+    const getVisitorTwo = await request(app)
+      .get('/api/user/preferences')
+      .set('Cookie', cookieVisitorTwo);
+    expect(getVisitorTwo.status).toBe(200);
+    expect(getVisitorTwo.body).toEqual({ profile: null });
   });
 
   it('clears the session cookie on POST /api/auth/logout with Max-Age=0', async () => {
@@ -297,5 +323,65 @@ describe('Brute-force rate limiting & public evaluator routes', () => {
       .set('Cookie', cookie)
       .send({ city: 'delhi', profile: SAMPLE_PROFILE });
     expect(conflictPrefsEnvelope.status).toBe(400);
+  });
+});
+
+describe('Preference validator and instance fallback', () => {
+  it('rejects malformed or conflicting validators without modifying the stored profile', async () => {
+    const app = createApp();
+    const login = await request(app).post('/api/auth/login')
+      .send({ email: 'family.eval@smogwise.in', password: VALID_PASSWORD });
+    const cookie = extractCookiePair(login.headers['set-cookie']);
+    const route = '/api/user/preferences';
+    for (const header of ['v0', '*', 'W/"v0"', '"v00"', '"v0", "v1"', '"v9007199254740992"']) {
+      const res = await request(app).put(route).set('Cookie', cookie).set('If-Match', header)
+        .send({ profile: SAMPLE_PROFILE, expectedVersion: 0 });
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ error: 'INVALID_IF_MATCH' });
+    }
+    const mismatch = await request(app).put(route).set('Cookie', cookie).set('If-Match', '"v1"')
+      .send({ profile: SAMPLE_PROFILE, expectedVersion: 0 });
+    expect(mismatch.status).toBe(400);
+    const current = await request(app).get(route).set('Cookie', cookie);
+    expect(current.headers['etag']).toBe('"v0"');
+    expect(current.body).toEqual({ profile: null });
+  });
+
+  it('recovers a signed preference revision on a separate serverless instance', async () => {
+    vi.stubEnv('AUTH_SECRET', 'stable-test-key-for-independent-serverless-instances');
+    const a = createApp();
+    const login = await request(a).post('/api/auth/login')
+      .send({ email: 'family.eval@smogwise.in', password: VALID_PASSWORD });
+    const authCookie = extractCookiePair(login.headers['set-cookie']);
+    const saved = await request(a).put('/api/user/preferences').set('Cookie', authCookie)
+      .set('If-Match', '"v0"').send({ profile: SAMPLE_PROFILE });
+    const savedCookie = extractCookiePair(saved.headers['set-cookie']);
+    vi.resetModules();
+    const b = (await import('../../server/app.js')).createApp();
+    const read = await request(b).get('/api/user/preferences')
+      .set('Cookie', `${authCookie}; ${savedCookie}`);
+    expect(read.headers['etag']).toBe('"v1"');
+    expect(read.body).toEqual({ profile: SAMPLE_PROFILE });
+    const staleWrite = await request(b).put('/api/user/preferences')
+      .set('Cookie', `${authCookie}; ${savedCookie}`).set('If-Match', '"v0"')
+      .send({ profile: { ...SAMPLE_PROFILE, householdSize: 6 } });
+    expect(staleWrite.status).toBe(409);
+
+    const missingValidator = await request(b).put('/api/user/preferences')
+      .set('Cookie', `${authCookie}; ${savedCookie}`)
+      .send({ profile: { ...SAMPLE_PROFILE, householdSize: 5 } });
+    expect(missingValidator.status).toBe(400);
+    expect(missingValidator.body).toMatchObject({ error: 'INVALID_IF_MATCH' });
+  });
+
+  it('keeps the production public API up while disabling auth with no stable signing secret', async () => {
+    vi.stubEnv('AUTH_SECRET', 'short');
+    vi.stubEnv('NODE_ENV', 'production');
+    const app = createApp();
+    const health = await request(app).get('/api/health');
+    const session = await request(app).get('/api/auth/session');
+    expect(health.status).toBe(200);
+    expect(session.status).toBe(503);
+    expect(session.body).toMatchObject({ error: 'AUTH_UNAVAILABLE' });
   });
 });

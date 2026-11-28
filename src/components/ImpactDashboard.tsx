@@ -21,6 +21,7 @@ const METRIC_TEXT = {
     doseTitle: 'Inhaled PM2.5 Dose',
     indoorTitle: 'Indoor PM2.5',
     co2eTitle: 'CO2e Avoided',
+    co2eDeltaTitle: 'CO2e vs. Baseline',
     savingsTitle: 'Monthly Net Savings',
   },
   hi: {
@@ -31,9 +32,17 @@ const METRIC_TEXT = {
     doseTitle: 'दैनिक PM2.5 खुराक',
     indoorTitle: 'इनडोर PM2.5',
     co2eTitle: 'CO2e बचत',
+    co2eDeltaTitle: 'CO2e (बेसलाइन से अंतर)',
     savingsTitle: 'मासिक शुद्ध बचत',
   },
 } as const;
+
+function formatSignedDelta(value: number, unit: string): string {
+  if (value >= 0) {
+    return `${String(value)} ${unit}`;
+  }
+  return `+${String(Math.abs(value))} ${unit}`;
+}
 
 function buildImpactCards(
   report: DeterministicReport,
@@ -41,6 +50,7 @@ function buildImpactCards(
 ): readonly { readonly title: string; readonly value: string; readonly sub: string }[] {
   const t = METRIC_TEXT[language];
   const { exposure, emissions } = report;
+  const isNetIncrease = emissions.co2eAvoidedGramsPerDay < 0 || emissions.pm25AvoidedMgPerDay < 0;
   return [
     {
       title: t.doseTitle,
@@ -53,9 +63,9 @@ function buildImpactCards(
       sub: `${t.before}: ${String(exposure.baselineIndoorPm25)} ug/m3`,
     },
     {
-      title: t.co2eTitle,
-      value: `${String(emissions.co2eAvoidedGramsPerDay)} g/${t.perDay}`,
-      sub: `PM2.5: ${String(emissions.pm25AvoidedMgPerDay)} mg/${t.perDay}`,
+      title: isNetIncrease ? t.co2eDeltaTitle : t.co2eTitle,
+      value: formatSignedDelta(emissions.co2eAvoidedGramsPerDay, `g/${t.perDay}`),
+      sub: `PM2.5: ${formatSignedDelta(emissions.pm25AvoidedMgPerDay, `mg/${t.perDay}`)}`,
     },
     {
       title: t.savingsTitle,
@@ -116,6 +126,13 @@ export const ImpactDashboard: React.FC<ImpactDashboardProps> = React.memo(
         <h2 id="impact-heading" className="text-base font-bold text-slate-900">
           {isHi ? 'प्रत्यक्ष स्वास्थ्य और उत्सर्जन प्रभाव' : 'Direct Health & Emissions Impact'}
         </h2>
+        {report.aqStatus === 'unavailable' && (
+          <p className="mt-2 rounded border border-amber-400 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-950">
+            {isHi
+              ? 'लाइव बाहरी स्टेशन अनुपलब्ध (>50 km); खुराक और उत्सर्जन मान बेसलाइन अनुमान पर आधारित हैं।'
+              : 'Live outdoor station unavailable (>50 km); exposure and emissions reflect baseline estimates.'}
+          </p>
+        )}
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           {cards.map((card) => (
             <div key={card.title} className="rounded-md border border-slate-300 bg-slate-50 p-3">

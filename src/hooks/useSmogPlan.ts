@@ -3,10 +3,11 @@
  * race-safe live AQI, /api/plan, and /api/plan/briefing sync, plus <html lang> sync.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import { computeFullPlan } from '../domain/impactService.js';
+import { buildRwaScaledPlan, computeFullPlan } from '../domain/impactService.js';
 import type {
+  DeterministicReport,
   FullPlanOutput,
   IAQHackId,
   LanguageCode,
@@ -23,9 +24,8 @@ import {
   DEFAULT_RWA_HOUSEHOLDS,
   formatAqErrorCode,
   stripCustomLocation,
-  useDebouncedAqSync,
-  useDebouncedBriefingSync,
-  useDebouncedPlanSync,
+  useHouseholdProfile,
+  useRemotePlan,
 } from './useSmogPlanHelpers.js';
 
 /** Re-exported air-quality metadata type for plan consumers. */
@@ -52,6 +52,15 @@ export const DEFAULT_PROFILE: UserProfile = {
 export interface UseSmogPlanResult {
   readonly profile: UserProfile;
   readonly plan: FullPlanOutput;
+  readonly householdReport: DeterministicReport;
+  readonly snapshotToken: string | undefined;
+  readonly syncExternalReport: (
+    report: DeterministicReport,
+    token?: string,
+    requestedToken?: string,
+  ) => void;
+  readonly presetSelectionRevision: number;
+  readonly briefingFailed: boolean;
   readonly liveAq: LiveAqOverride | undefined;
   readonly aqMeta: AqMeta | undefined;
   readonly aqiError: string | undefined;
@@ -68,116 +77,75 @@ export interface UseSmogPlanResult {
   readonly updateRwaAdoptionRate: (rate: number) => void;
 }
 
-interface ProfileActions {
-  readonly updateProfile: (patch: Partial<UserProfile>) => void;
-  readonly toggleHack: (hackId: IAQHackId) => void;
-  readonly setLanguage: (lang: LanguageCode) => void;
-  readonly selectLocation: (item: LocationSearchItem) => void;
-  readonly selectPresetCity: (cityId: string) => void;
-  readonly applySampleScenario: (scenarioProfile: UserProfile) => void;
-  readonly updateRwaHouseholds: (households: number) => void;
-  readonly updateRwaAdoptionRate: (rate: number) => void;
-}
-
-interface ActionSetters {
-  readonly setProfile: Dispatch<SetStateAction<UserProfile>>;
-  readonly setSyncedPlan: Dispatch<SetStateAction<FullPlanOutput | undefined>>;
-  readonly setBriefing: Dispatch<SetStateAction<PlanBriefingApiResponse | undefined>>;
-  readonly setLiveAq: Dispatch<SetStateAction<LiveAqOverride | undefined>>;
-  readonly setAqMeta: Dispatch<SetStateAction<AqMeta | undefined>>;
-  readonly setAqiErrorCode: Dispatch<SetStateAction<AqErrorCode | undefined>>;
-}
-
-function useClearRemoteState(setters: ActionSetters): () => void {
-  const { setSyncedPlan, setBriefing, setLiveAq, setAqMeta, setAqiErrorCode } = setters;
-  return useCallback(() => {
-    setSyncedPlan(undefined);
-    setBriefing(undefined);
-    setLiveAq(undefined);
-    setAqMeta(undefined);
-    setAqiErrorCode(undefined);
-  }, [setSyncedPlan, setBriefing, setLiveAq, setAqMeta, setAqiErrorCode]);
-}
-
-function useProfileLocationActions(
+function useProfileActions(
   setProfile: Dispatch<SetStateAction<UserProfile>>,
-  clearRemoteState: () => void,
-): Pick<
-  ProfileActions,
-  'selectLocation' | 'selectPresetCity' | 'applySampleScenario'
-> {
-  const selectLocation = useCallback((item: LocationSearchItem) => {
-    clearRemoteState();
-    setProfile((prev) => ({ ...prev, customLocation: buildCustomLocation(item) }));
-  }, [clearRemoteState, setProfile]);
-
-  const selectPresetCity = useCallback((cityId: string) => {
-    clearRemoteState();
-    setProfile((prev) => stripCustomLocation(prev, cityId));
-  }, [clearRemoteState, setProfile]);
-
-  const applySampleScenario = useCallback((scenarioProfile: UserProfile) => {
-    clearRemoteState();
-    setProfile({ ...scenarioProfile });
-  }, [clearRemoteState, setProfile]);
-
-  return { selectLocation, selectPresetCity, applySampleScenario };
-}
-
-function useProfileActions(setters: ActionSetters, profile: UserProfile): ProfileActions {
-  const { setProfile, setSyncedPlan, setBriefing } = setters;
-  const { cityId, customLocation } = profile;
-  const clearRemoteState = useClearRemoteState(setters);
-  const locationActions = useProfileLocationActions(setProfile, clearRemoteState);
-
+  revise: Dispatch<SetStateAction<number>>,
+) {
   const updateProfile = useCallback((patch: Partial<UserProfile>) => {
-    const cityChanged = patch.cityId !== undefined && patch.cityId !== cityId;
-    const customChanged = 'customLocation' in patch && patch.customLocation !== customLocation;
-    if (cityChanged || customChanged) {
-      clearRemoteState();
-    } else {
-      setSyncedPlan(undefined);
-      setBriefing(undefined);
-    }
     setProfile((prev) => ({ ...prev, ...patch }));
-  }, [cityId, customLocation, clearRemoteState, setSyncedPlan, setBriefing, setProfile]);
+  }, [setProfile]);
 
   const toggleHack = useCallback((hackId: IAQHackId) => {
-    setSyncedPlan(undefined);
-    setBriefing(undefined);
-    setProfile((prev) => {
-      const exists = prev.activeHacks.includes(hackId);
-      const nextHacks = exists
+    setProfile((prev) => ({
+      ...prev,
+      activeHacks: prev.activeHacks.includes(hackId)
         ? prev.activeHacks.filter((id) => id !== hackId)
-        : [...prev.activeHacks, hackId];
-      return { ...prev, activeHacks: nextHacks };
-    });
-  }, [setSyncedPlan, setBriefing, setProfile]);
+        : [...prev.activeHacks, hackId],
+    }));
+  }, [setProfile]);
 
-  const setLanguage = useCallback((language: LanguageCode) => {
-    setSyncedPlan(undefined);
-    setBriefing(undefined);
-    setProfile((prev) => ({ ...prev, language }));
-  }, [setSyncedPlan, setBriefing, setProfile]);
-
-  const updateRwaHouseholds = useCallback((rwaHouseholds: number) => {
-    setSyncedPlan(undefined);
-    setProfile((prev) => ({ ...prev, rwaHouseholds }));
-  }, [setSyncedPlan, setProfile]);
-
-  const updateRwaAdoptionRate = useCallback((rwaAdoptionRate: number) => {
-    setSyncedPlan(undefined);
-    setProfile((prev) => ({ ...prev, rwaAdoptionRate }));
-  }, [setSyncedPlan, setProfile]);
-
+  const setLanguage = useCallback((language: LanguageCode) => updateProfile({ language }),
+    [updateProfile]);
+  const selectLocation = useCallback((item: LocationSearchItem) => {
+    revise((value) => value + 1);
+    updateProfile({ customLocation: buildCustomLocation(item) });
+  }, [revise, updateProfile]);
+  const selectPresetCity = useCallback((cityId: string) => {
+    revise((value) => value + 1);
+    setProfile((prev) => stripCustomLocation(prev, cityId));
+  }, [revise, setProfile]);
+  const applySampleScenario = useCallback((scenario: UserProfile) => {
+    revise((value) => value + 1);
+    setProfile(scenario);
+  }, [revise, setProfile]);
+  const updateRwaHouseholds = useCallback((rwaHouseholds: number) =>
+    updateProfile({ rwaHouseholds }), [updateProfile]);
+  const updateRwaAdoptionRate = useCallback((rwaAdoptionRate: number) =>
+    updateProfile({ rwaAdoptionRate }), [updateProfile]);
   return {
-    updateProfile,
-    toggleHack,
-    setLanguage,
-    ...locationActions,
-    updateRwaHouseholds,
-    updateRwaAdoptionRate,
+    updateProfile, toggleHack, setLanguage, selectLocation, selectPresetCity,
+    applySampleScenario, updateRwaHouseholds, updateRwaAdoptionRate,
   };
+}
+
+function resolveEffectivePlan(
+  basePlan: FullPlanOutput,
+  aqiErrorCode: AqErrorCode | undefined,
+  isAqSyncing: boolean,
+  hasCustomLocation: boolean,
+  hasLiveAq: boolean,
+): FullPlanOutput {
+  if (aqiErrorCode === 'LIVE_AQ_UNAVAILABLE') {
+    return { ...basePlan, report: { ...basePlan.report, aqStatus: 'unavailable' } };
+  }
+  if (isAqSyncing && hasCustomLocation && !hasLiveAq) {
+    return { ...basePlan, report: { ...basePlan.report, aqStatus: 'pending' } };
+  }
+  return basePlan;
+}
+
+function matchesObservation(
+  briefing: PlanBriefingApiResponse | undefined, report: DeterministicReport,
+): boolean {
+  return briefing !== undefined && briefing.observationId === report.observationId
+    && briefing.aqStatus === report.aqStatus;
+}
+
+function matchPlan(local: FullPlanOutput, remote?: FullPlanOutput): FullPlanOutput {
+  if (remote === undefined || remote.report.aqStatus !== local.report.aqStatus) {
+    return local;
+  }
+  return remote;
 }
 
 /** Provides instant Tier 1 deterministic planning with race-safe backend sync. */
@@ -186,54 +154,48 @@ export function useSmogPlan(initialOverrides?: Partial<UserProfile>): UseSmogPla
     ...DEFAULT_PROFILE,
     ...initialOverrides,
   }));
-  const [liveAq, setLiveAq] = useState<LiveAqOverride | undefined>(undefined);
-  const [aqMeta, setAqMeta] = useState<AqMeta | undefined>(undefined);
-  const [aqiErrorCode, setAqiErrorCode] = useState<AqErrorCode | undefined>(undefined);
-  const [syncedPlan, setSyncedPlan] = useState<FullPlanOutput | undefined>(undefined);
-  const [isAqSyncing, setIsAqSyncing] = useState<boolean>(false);
-  const [briefing, setBriefing] = useState<PlanBriefingApiResponse | undefined>(undefined);
-  const [isBriefingLoading, setIsBriefingLoading] = useState<boolean>(false);
-  const aqGenRef = useRef<number>(0);
-  const planGenRef = useRef<number>(0);
-  const briefingGenRef = useRef<number>(0);
-
-  const instantPlan = useMemo(() => computeFullPlan(profile, liveAq), [profile, liveAq]);
+  const [presetSelectionRevision, revise] = useState(0);
+  const householdProfile = useHouseholdProfile(profile);
+  const remote = useRemotePlan(householdProfile, presetSelectionRevision);
+  const {
+    liveAq, aqMeta, snapshotToken, syncExternalReport, syncedPlan, aqiErrorCode,
+    isAqSyncing, briefing, isBriefingLoading,
+  } = remote;
+  const householdPlan = useMemo(
+    () => computeFullPlan(householdProfile, liveAq), [householdProfile, liveAq],
+  );
+  const household = matchPlan(householdPlan, syncedPlan);
+  const basePlan = useMemo(
+    () => buildRwaScaledPlan(household, profile),
+    [household, profile],
+  );
+  const hasCustom = profile.customLocation !== undefined;
+  const hasLiveAq = liveAq !== undefined;
+  const plan = useMemo(
+    () => resolveEffectivePlan(basePlan, aqiErrorCode, isAqSyncing, hasCustom, hasLiveAq),
+    [basePlan, aqiErrorCode, isAqSyncing, hasCustom, hasLiveAq],
+  );
 
   useEffect(() => {
     document.documentElement.lang = profile.language;
   }, [profile.language]);
 
-  useDebouncedAqSync(profile, {
-    generationRef: aqGenRef,
-    setLiveAq,
-    setAqMeta,
-    setAqiErrorCode,
-    setIsAqSyncing,
-  });
-  useDebouncedPlanSync(profile, { generationRef: planGenRef, setSyncedPlan, setAqiErrorCode });
-  useDebouncedBriefingSync(profile, {
-    generationRef: briefingGenRef,
-    setBriefing,
-    setIsBriefingLoading,
-  });
 
-  const actions = useProfileActions({
-    setProfile,
-    setSyncedPlan,
-    setBriefing,
-    setLiveAq,
-    setAqMeta,
-    setAqiErrorCode,
-  }, profile);
-
+  const actions = useProfileActions(setProfile, revise);
+  const matchingBriefing = matchesObservation(briefing, plan.report);
   return {
     profile,
-    plan: syncedPlan ?? instantPlan,
+    plan,
     liveAq,
     aqMeta,
     aqiError: formatAqErrorCode(aqiErrorCode, profile.language),
     isSyncing: isAqSyncing,
-    briefing,
+    briefing: matchingBriefing ? briefing : undefined,
+    briefingFailed: remote.briefingError || (briefing !== undefined && !matchingBriefing),
+    householdReport: household.report,
+    snapshotToken,
+    syncExternalReport,
+    presetSelectionRevision,
     isBriefingLoading,
     ...actions,
   };

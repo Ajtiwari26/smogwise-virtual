@@ -15,6 +15,7 @@ interface EmailFieldProps {
   readonly isHi: boolean;
   readonly email: string;
   readonly hasError: boolean;
+  readonly hasFieldError: boolean;
   readonly onEmailChange: (value: string) => void;
 }
 
@@ -22,6 +23,7 @@ const EmailField: React.FC<EmailFieldProps> = React.memo(function EmailField({
   isHi,
   email,
   hasError,
+  hasFieldError,
   onEmailChange,
 }) {
   return (
@@ -34,7 +36,7 @@ const EmailField: React.FC<EmailFieldProps> = React.memo(function EmailField({
         type="email"
         autoComplete="email"
         required
-        aria-invalid={hasError}
+        aria-invalid={hasFieldError}
         aria-describedby={hasError ? 'login-error-alert' : undefined}
         value={email}
         onChange={(e) => onEmailChange(e.target.value)}
@@ -49,6 +51,7 @@ interface PasswordFieldProps {
   readonly password: string;
   readonly showPassword: boolean;
   readonly hasError: boolean;
+  readonly hasFieldError: boolean;
   readonly onPasswordChange: (value: string) => void;
   readonly onToggleShowPassword: () => void;
 }
@@ -58,6 +61,7 @@ const PasswordField: React.FC<PasswordFieldProps> = React.memo(function Password
   password,
   showPassword,
   hasError,
+  hasFieldError,
   onPasswordChange,
   onToggleShowPassword,
 }) {
@@ -73,7 +77,7 @@ const PasswordField: React.FC<PasswordFieldProps> = React.memo(function Password
           type={showPassword ? 'text' : 'password'}
           autoComplete="current-password"
           required
-          aria-invalid={hasError}
+          aria-invalid={hasFieldError}
           aria-describedby={hasError ? 'login-error-alert' : undefined}
           value={password}
           onChange={(e) => onPasswordChange(e.target.value)}
@@ -116,6 +120,8 @@ export interface CredentialFormProps {
   readonly isSubmitting: boolean;
   readonly isCheckingSession: boolean;
   readonly errorMessage: string | null;
+  readonly invalidEmail?: boolean;
+  readonly invalidPassword?: boolean;
   readonly onEmailChange: (value: string) => void;
   readonly onPasswordChange: (value: string) => void;
   readonly onToggleShowPassword: () => void;
@@ -127,6 +133,7 @@ export function CredentialFormSection(props: CredentialFormProps): React.ReactEl
   const { isHi, isSubmitting, isCheckingSession } = props;
   const isBusy = isSubmitting || isCheckingSession;
   const hasError = props.errorMessage !== null;
+
   const heading = isHi ? 'स्मॉगवाइज़ में साइन इन करें' : 'Sign In to SmogWise Workspace';
   const subtitle = isHi
     ? 'व्यक्तिगत CPCB AQI योजना और परिवार सुरक्षा डैशबोर्ड खोलें।'
@@ -148,6 +155,7 @@ export function CredentialFormSection(props: CredentialFormProps): React.ReactEl
           isHi={isHi}
           email={props.email}
           hasError={hasError}
+          hasFieldError={props.invalidEmail ?? false}
           onEmailChange={props.onEmailChange}
         />
         <PasswordField
@@ -155,6 +163,7 @@ export function CredentialFormSection(props: CredentialFormProps): React.ReactEl
           password={props.password}
           showPassword={props.showPassword}
           hasError={hasError}
+          hasFieldError={props.invalidPassword ?? false}
           onPasswordChange={props.onPasswordChange}
           onToggleShowPassword={props.onToggleShowPassword}
         />

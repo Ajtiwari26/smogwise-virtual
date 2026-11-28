@@ -3,6 +3,14 @@
  * Zero React, DOM, Node, or network dependencies.
  */
 
+/** Rounds a finite numeric value to one decimal place. */
+export function round1(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.round(value * 10) / 10;
+}
+
 /** Rounds a finite numeric value to two decimal places. */
 export function round2(value: number): number {
   if (!Number.isFinite(value)) {

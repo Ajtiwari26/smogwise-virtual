@@ -11,6 +11,7 @@ import { type SearchState, useLocationCombobox } from './useLocationCombobox.js'
 /** Props for the LocationSearchCombobox component. */
 export interface LocationSearchComboboxProps {
   readonly language: LanguageCode;
+  readonly presetSelectionRevision?: number | string;
   readonly customLocation: CustomLocation | undefined;
   readonly onSelectLocation: (item: LocationSearchItem) => void;
 }
@@ -187,12 +188,15 @@ function ComboboxHeaderRow({
 export function LocationSearchCombobox({
   language,
   customLocation,
+  presetSelectionRevision,
   onSelectLocation,
 }: LocationSearchComboboxProps): ReactElement {
   const isHindi = language === 'hi';
   const inputId = useId();
   const listboxId = useId();
-  const ctrl = useLocationCombobox(isHindi, customLocation, onSelectLocation);
+  const ctrl = useLocationCombobox(
+    isHindi, customLocation, onSelectLocation, presetSelectionRevision,
+  );
 
   return (
     <div

@@ -15,18 +15,23 @@ export interface ErrorBoundaryProps {
 
 interface ErrorBoundaryState {
   readonly hasError: boolean;
+  readonly errorSummary?: string;
 }
 
 /** Catches unexpected UI errors and renders an accessible EN/HI recovery card. */
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   public override state: ErrorBoundaryState = { hasError: false };
 
-  public static getDerivedStateFromError(): ErrorBoundaryState {
-    return { hasError: true };
+  public static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    const msg = error.message.trim().slice(0, 120);
+    return { hasError: true, errorSummary: msg.length > 0 ? msg : error.name };
   }
 
-  public override componentDidCatch(_error: Error, _info: ErrorInfo): void {
-    // Error state is captured in getDerivedStateFromError for fallback rendering
+  public override componentDidCatch(_error: Error, info: ErrorInfo): void {
+    const stackLen = info.componentStack?.length ?? 0;
+    if (stackLen > 0 && this.state.errorSummary === undefined) {
+      this.setState({ errorSummary: 'Panel render exception' });
+    }
   }
 
   public override componentDidUpdate(prevProps: ErrorBoundaryProps): void {

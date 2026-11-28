@@ -139,3 +139,17 @@ export function computeExposureMetrics(
     hourlySeries,
   };
 }
+
+/** Models the selected interventions' daily dose without recalculating baseline exposure. */
+export function computeSelectedDailyDose(
+  profile: UserProfile,
+  outdoorSeries: readonly number[],
+): number {
+  const indoor = simulateIndoorSeries(outdoorSeries, profile, true);
+  const maskFactor = profile.activeHacks.includes('n95_mask') ? 1 - N95_FILTRATION_EFFICIENCY : 1;
+  return round2(outdoorSeries.reduce((sum, outdoor, hour) => {
+    const isOutdoor = isPersonaOutdoorHour(profile, hour);
+    const concentration = isOutdoor ? outdoor * maskFactor : (indoor[hour] ?? outdoor);
+    return sum + round2(concentration * computePersonaInhalationRate(profile, hour, isOutdoor));
+  }, 0));
+}

@@ -154,22 +154,25 @@ function measureCacheSpeedup(
   hashKey: (input: unknown) => string,
   compute: () => unknown,
 ): number {
-  const input = { route: 'plan', profile: SAMPLE_PROFILE, liveAq: null };
-  const cacheKey = hashKey(input);
+  const input = {
+    route: 'plan', profile: SAMPLE_PROFILE, liveAq: null, aqStatus: 'nearby_proxy',
+    observationId: '[28.65,77.32,"nearby_proxy",null,285,430,72]',
+  };
   const readCached = (): unknown => {
-    const cached = cache.get(cacheKey);
+    const key = hashKey(input);
+    const cached = cache.get(key);
     if (cached !== undefined) {
       return cached;
     }
-    const key = hashKey(input);
     const computed = compute();
     cache.set(key, computed);
     return computed;
   };
+  const resetKey = hashKey(input);
   const loadColdBatch = () => {
     const start = performance.now();
     for (let i = 0; i < 8; i += 1) {
-      cache.delete(cacheKey);
+      cache.delete(resetKey);
       readCached();
     }
     return performance.now() - start;

@@ -8,6 +8,7 @@ import type { ErrorRequestHandler, RequestHandler } from 'express';
 import rateLimit from 'express-rate-limit';
 import { ZodError } from 'zod';
 import { isPlainRecord } from '../../src/domain/domainUtils.js';
+import { logServerEvent } from '../config/logger.js';
 import { buildAllowedOrigins } from './headersAndCors.js';
 
 /** Re-exported strict CORS allowlist middleware. */
@@ -58,7 +59,7 @@ function evaluateCrossSiteMutation(
       message: 'Cross-site mutation rejected.',
     };
   }
-  if (typeof origin === 'string' && !allowedOrigins.has(origin)) {
+  if (origin !== undefined && (typeof origin !== 'string' || !allowedOrigins.has(origin))) {
     return {
       blocked: true,
       code: 'FORBIDDEN_ORIGIN',
@@ -105,7 +106,7 @@ function makeLimiter(max: number, message: string): RequestHandler {
     max,
     standardHeaders: 'draft-7',
     legacyHeaders: false,
-    message: { error: message },
+    message: { error: 'RATE_LIMITED', message },
   });
 }
 
@@ -176,17 +177,23 @@ function isMalformedJsonError(err: unknown): boolean {
 /**
  * Centralized JSON error handler that never exposes stack traces or internal paths.
  */
-export const centralizedErrorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
-  if (!res.headersSent) {
-    res.setHeader('Cache-Control', 'private, no-store');
+export const centralizedErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
+  if (res.headersSent) {
+    next(err);
+    return;
   }
+  res.setHeader('Cache-Control', 'private, no-store');
   if (isPayloadTooLarge(err)) {
-    res.status(413).json({ error: 'Request payload exceeds the 16KB limit.' });
+    res.status(413).json({
+      error: 'PAYLOAD_TOO_LARGE',
+      message: 'Request payload exceeds the 16KB limit.',
+    });
     return;
   }
   if (err instanceof ZodError) {
     res.status(400).json({
-      error: 'Validation failed.',
+      error: 'VALIDATION_ERROR',
+      message: 'Validation failed.',
       details: err.issues.slice(0, 5).map((issue) => ({
         path: issue.path.join('.'),
         message: issue.message,
@@ -195,8 +202,16 @@ export const centralizedErrorHandler: ErrorRequestHandler = (err, _req, res, _ne
     return;
   }
   if (isMalformedJsonError(err)) {
-    res.status(400).json({ error: 'Malformed JSON request body.' });
+    res.status(400).json({
+      error: 'MALFORMED_JSON',
+      message: 'Malformed JSON request body.',
+    });
     return;
   }
-  res.status(500).json({ error: 'Internal server error.' });
+  logServerEvent('error', 'api_unhandled_error', {
+    method: req.method,
+    path: req.path,
+    errorName: err instanceof Error ? err.name : 'UnknownError',
+  });
+  res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Internal server error.' });
 };

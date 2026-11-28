@@ -103,13 +103,13 @@ function buildEveningDescription(
   const base = pickText(getPersonaCopy(profile.persona).eveningDesc, isHi);
   if (profile.cookingFuel === 'biomass_chulha') {
     return isHi
-      ? `${base} इनडोर रसोई PM2.5 घटाने हेतु LPG/इंडक्शन अपनाएं या क्रॉस-वेंटिलेशन व एग्जॉस्ट रखें।`
-      : `${base} Switch to LPG/induction or use cross-ventilation/exhaust to cut indoor kitchen PM2.5.`;
+      ? `${base} इनडोर रसोई PM2.5 घटाने हेतु LPG/इंडक्शन अपनाएं और रसोई का एग्जॉस्ट चलाएं।`
+      : `${base} Switch to LPG or induction and use kitchen exhaust to reduce indoor cooking particles.`;
   }
   if (indoorPm25 > outdoorPm25) {
     return isHi
-      ? `${base} खाना बनाते समय रसोई एग्जॉस्ट और क्रॉस-वेंटिलेशन चालू रखें।`
-      : `${base} Keep kitchen exhaust and cross-ventilation active while cooking.`;
+      ? `${base} खाना बनाते समय रसोई एग्जॉस्ट चालू रखें।`
+      : `${base} Keep kitchen exhaust active while cooking.`;
   }
   return base;
 }

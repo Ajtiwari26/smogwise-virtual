@@ -68,6 +68,31 @@ describe('evaluator reporting & deduction sorting', () => {
     expect(md).toContain('-3.00 pts');
     expect(md).not.toContain('--3.00');
   });
+
+  it('joins SDK model output fragments and distinguishes failed configured AI judge', () => {
+    expect(
+      utils.extractInteractionText({
+        status: 'completed',
+        steps: [{ type: 'model_output', content: [
+          { type: 'text', text: 'First block ' },
+          { type: 'text', text: 'Second block' },
+        ] }],
+      }),
+    ).toBe('First block Second block');
+
+    const detResults: readonly AnalyzerResult[] = [
+      {
+        criterion: 'alignment',
+        deterministicScore: 12,
+        maxDeterministic: 12,
+        deductions: [],
+        metrics: {},
+      },
+    ];
+    const configuredFail = buildColdFallback(detResults, 5, true);
+    expect(configuredFail.deductions[0]?.evidence).toContain('request failed or timed out');
+    expect(configuredFail.deductions[0]?.evidence).not.toContain('no live AI judge keys');
+  });
 });
 
 describe('testingAnalyzer checkDomainCoverage', () => {

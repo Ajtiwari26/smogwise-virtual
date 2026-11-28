@@ -4,9 +4,10 @@
 
 import React from 'react';
 import type { AiAskApiResponse } from '../services/apiClient.js';
+import { formatGeminiLabel } from './modelAttribution.js';
 
 /** Machine-readable validation and request error codes for GroundedAssistant. */
-export type AssistantErrorCode = 'EMPTY_QUESTION' | 'ASK_FAILED';
+export type AssistantErrorCode = 'EMPTY_QUESTION' | 'ASK_FAILED' | 'AQ_CHANGED' | 'AQ_UNAVAILABLE';
 
 const QUICK_PROMPTS = [
   {
@@ -23,9 +24,13 @@ const QUICK_PROMPTS = [
   },
 ] as const;
 
-function formatAssistantMode(mode: AiAskApiResponse['mode'], isHi: boolean): string {
+function formatAssistantMode(
+  mode: AiAskApiResponse['mode'],
+  isHi: boolean,
+  modelUsed?: string,
+): string {
   if (mode === 'gemini_interactions') {
-    return isHi ? 'Gemini 4 ग्राउंडेड' : 'Gemini 4 Grounded';
+    return formatGeminiLabel(modelUsed, isHi);
   }
   if (mode === 'guard_refusal') {
     return isHi ? 'सुरक्षा गार्ड' : 'Safety Guard';
@@ -42,6 +47,14 @@ export function formatAssistantError(code: AssistantErrorCode | null, isHi: bool
     return isHi
       ? 'कृपया स्मॉग सुरक्षा से जुड़ा प्रश्न लिखें।'
       : 'Please enter a smog safety question first.';
+  }
+  if (code === 'AQ_CHANGED') {
+    return isHi ? 'वायु गुणवत्ता का स्नैपशॉट बदल गया। पेज रीफ़्रेश करें।'
+      : 'The air quality snapshot changed. Refresh the page to update the plan.';
+  }
+  if (code === 'AQ_UNAVAILABLE') {
+    return isHi ? 'इस स्थान के लिए प्रतिनिधि वायु गुणवत्ता उपलब्ध नहीं है।'
+      : 'Representative air quality is unavailable for this location.';
   }
   return isHi
     ? 'सहायक से उत्तर नहीं मिल सका। कृपया पुनः प्रयास करें।'
@@ -85,7 +98,7 @@ export const AssistantAnswerCard: React.FC<{
     <div className="rounded-md border border-slate-300 bg-slate-50 p-3">
       <div className="mb-1 flex flex-wrap items-center gap-2 text-xs font-semibold">
         <span className="rounded bg-slate-900 px-2 py-0.5 text-white">
-          {formatAssistantMode(response.mode, isHi)}
+          {formatAssistantMode(response.mode, isHi, response.modelUsed)}
         </span>
         {response.guardTriggered && (
           <span className="rounded bg-red-900 px-2 py-0.5 text-white">Guard Active</span>
@@ -112,6 +125,7 @@ export const AssistantForm: React.FC<{
   readonly isHi: boolean;
   readonly isLoading: boolean;
   readonly hasError: boolean;
+  readonly isFieldInvalid: boolean;
   readonly onQuestionChange: (val: string) => void;
   readonly onSubmit: () => void;
 }> = React.memo(function AssistantForm({
@@ -119,6 +133,7 @@ export const AssistantForm: React.FC<{
   isHi,
   isLoading,
   hasError,
+  isFieldInvalid,
   onQuestionChange,
   onSubmit,
 }) {
@@ -143,7 +158,7 @@ export const AssistantForm: React.FC<{
         id="assistant-input"
         type="text"
         value={question}
-        aria-invalid={hasError}
+        aria-invalid={isFieldInvalid}
         aria-describedby={hasError ? 'assistant-error' : undefined}
         onChange={(e) => onQuestionChange(e.target.value)}
         placeholder={placeholderText}

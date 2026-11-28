@@ -5,7 +5,6 @@
 
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import { createLruCache } from '../cache/lruCache.js';
 import {
   DUMMY_SCRYPT_RECORD,
   findAccountByEmail,
@@ -13,7 +12,9 @@ import {
   type PublicUser,
   type StoredAuthAccount,
 } from '../config/authAccounts.js';
-import { getEnvConfig } from '../config/env.js';
+import { getEnvConfig, isSessionSigningConfigured } from '../config/env.js';
+import { clearSessionRevocations, isSessionRevoked, rememberRevocation }
+  from './sessionRevocation.js';
 
 /** Name of the HTTP-only session cookie issued on login. */
 export const SESSION_COOKIE_NAME = 'smogwise_session';
@@ -22,13 +23,6 @@ const SESSION_TTL_SECONDS = 86400;
 const MAX_CLOCK_SKEW_SECONDS = 60;
 const SCRYPT_KEY_LENGTH = 64;
 const SCRYPT_OPTIONS: crypto.ScryptOptions = { N: 16384, r: 8, p: 1 };
-const REVOKED_JTI_CACHE_SIZE = 1000;
-
-const revokedJtiCache = createLruCache<true>(
-  REVOKED_JTI_CACHE_SIZE,
-  SESSION_TTL_SECONDS * 1000,
-);
-
 const SessionTokenPayloadSchema = z.object({
   sub: z.string().trim().min(1),
   email: z.string().trim().min(1),
@@ -163,6 +157,7 @@ export async function verifyCredentialsAsync(
  * Signs an HMAC-SHA256 session token with a unique jti and 24-hour TTL.
  */
 export function signSessionToken(user: PublicUser, nowMs = Date.now()): string {
+  if (!isSessionSigningConfigured()) throw new Error('Session signing is unavailable.');
   const iat = Math.floor(nowMs / 1000);
   const payload: SessionTokenPayload = {
     sub: user.id,
@@ -180,9 +175,15 @@ export function signSessionToken(user: PublicUser, nowMs = Date.now()): string {
   return `${encodedPayload}.${signature}`;
 }
 
+function isActiveSession(payload: SessionTokenPayload, nowSeconds: number): boolean {
+  return payload.exp > nowSeconds &&
+    payload.iat <= nowSeconds + MAX_CLOCK_SKEW_SECONDS &&
+    !isSessionRevoked(payload.jti, payload.iat, nowSeconds);
+}
+
 function verifyAndDecodeToken(token: string, nowMs: number): SessionTokenPayload | null {
   const parts = token.split('.');
-  if (parts.length !== 2) {
+  if (parts.length !== 2 || !isSessionSigningConfigured()) {
     return null;
   }
   const [encodedPayload, signature] = parts;
@@ -195,26 +196,20 @@ function verifyAndDecodeToken(token: string, nowMs: number): SessionTokenPayload
   }
   const payload = parseSessionPayload(encodedPayload);
   const nowSeconds = Math.floor(nowMs / 1000);
-  if (
-    payload === null ||
-    payload.exp <= nowSeconds ||
-    payload.iat > nowSeconds + MAX_CLOCK_SKEW_SECONDS ||
-    revokedJtiCache.get(payload.jti) === true
-  ) {
-    return null;
-  }
-  return payload;
+  return payload !== null && isActiveSession(payload, nowSeconds) ? payload : null;
 }
 
-/**
- * Verifies an HMAC-SHA256 session token and returns the embedded PublicUser when valid.
- */
-export function verifySessionToken(token: string, nowMs = Date.now()): PublicUser | null {
+/** Verified authenticated user alongside unique token session identifier. */
+export interface VerifiedSession {
+  readonly user: PublicUser;
+  readonly jti: string;
+}
+
+/** Verifies an HMAC-SHA256 session token and returns both user and jti when valid. */
+export function verifySessionWithId(token: string, nowMs = Date.now()): VerifiedSession | null {
   const payload = verifyAndDecodeToken(token, nowMs);
-  if (payload === null) {
-    return null;
-  }
-  return {
+  if (payload === null) return null;
+  const user: PublicUser = {
     id: payload.sub,
     email: payload.email,
     name: payload.name,
@@ -222,59 +217,47 @@ export function verifySessionToken(token: string, nowMs = Date.now()): PublicUse
     defaultLang: payload.defaultLang,
     defaultCityId: payload.defaultCityId,
   };
+  return { jti: payload.jti, user };
 }
 
-/**
- * Revokes a valid session token's jti in the bounded LRU revocation set on logout.
- */
+/** Verifies an HMAC-SHA256 session token and returns PublicUser when valid. */
+export function verifySessionToken(token: string, nowMs = Date.now()): PublicUser | null {
+  return verifySessionWithId(token, nowMs)?.user ?? null;
+}
+
+/** Revokes a valid session token jti in the bounded LRU revocation set on logout. */
 export function revokeSessionToken(token: string, nowMs = Date.now()): boolean {
   const payload = verifyAndDecodeToken(token, nowMs);
-  if (payload === null) {
-    return false;
-  }
-  const remainingTtlMs = Math.max(1000, (payload.exp - Math.floor(nowMs / 1000)) * 1000);
-  revokedJtiCache.set(payload.jti, true, remainingTtlMs);
+  if (payload === null) return false;
+  rememberRevocation(payload.jti, payload.exp, Math.floor(nowMs / 1000));
   return true;
 }
 
 /** Clears revoked session token entries (used in unit tests). */
 export function clearRevokedSessionTokens(): void {
-  revokedJtiCache.clear();
+  clearSessionRevocations();
 }
 
 function extractCookieToken(cookieHeader: string | undefined): string | undefined {
-  if (cookieHeader === undefined || cookieHeader.trim().length === 0) {
-    return undefined;
-  }
+  if (cookieHeader === undefined || cookieHeader.trim().length === 0) return undefined;
   for (const segment of cookieHeader.split(';')) {
     const eqIndex = segment.indexOf('=');
-    if (eqIndex <= 0) {
-      continue;
-    }
-    const name = segment.slice(0, eqIndex).trim();
-    if (name === SESSION_COOKIE_NAME) {
-      const value = segment.slice(eqIndex + 1).trim();
-      return value.length > 0 ? value : undefined;
-    }
+    if (eqIndex <= 0 || segment.slice(0, eqIndex).trim() !== SESSION_COOKIE_NAME) continue;
+    const value = segment.slice(eqIndex + 1).trim();
+    if (value.length > 0) return value;
   }
   return undefined;
 }
 
 function extractBearerToken(authHeader: string | undefined): string | undefined {
-  if (authHeader === undefined) {
-    return undefined;
-  }
+  if (authHeader === undefined) return undefined;
   const trimmed = authHeader.trim();
-  if (!trimmed.toLowerCase().startsWith('bearer ')) {
-    return undefined;
-  }
+  if (!trimmed.toLowerCase().startsWith('bearer ')) return undefined;
   const token = trimmed.slice(7).trim();
   return token.length > 0 ? token : undefined;
 }
 
-/**
- * Extracts a session token from the Cookie header or Authorization Bearer header.
- */
+/** Extracts a session token from Cookie or Authorization Bearer headers. */
 export function extractSessionToken(
   cookieHeader?: string,
   authHeader?: string,

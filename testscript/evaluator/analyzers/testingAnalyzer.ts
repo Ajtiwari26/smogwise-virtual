@@ -2,7 +2,7 @@
  * Deterministic testing and coverage reliability analyzer for SmogWise Virtual.
  */
 
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AnalyzerResult, DeductionItem } from '../types.js';
 import { clamp, isPlainRecord, makeDeduction, round2, runShellCapture } from '../utils.js';
@@ -84,11 +84,13 @@ function parseVitestJson(raw: string): VitestJsonReport | null {
   return null;
 }
 
-async function readVitestReport(rootDir: string, stdout: string): Promise<VitestJsonReport | null> {
+async function readVitestReport(
+  reportPath: string, stdout: string,
+): Promise<VitestJsonReport | null> {
   const fromStdout = parseVitestJson(stdout);
   if (fromStdout !== null) return fromStdout;
   try {
-    const fileRaw = await readFile(join(rootDir, '.vitest', 'json', 'output.json'), 'utf8');
+    const fileRaw = await readFile(reportPath, 'utf8');
     return parseVitestJson(fileRaw);
   } catch (err: unknown) {
     void err;
@@ -182,7 +184,8 @@ function buildEmptyTestResult(): AnalyzerResult {
 }
 
 function buildFailedTestResult(discovered: number, failed: number): AnalyzerResult {
-  const msg = `Vitest run failed (${failed} failing test(s))`;
+  const msg = failed > 0 ? `Vitest run failed (${failed} failing test(s))`
+    : 'Vitest run or its coverage gate did not complete successfully.';
   return {
     criterion: 'testing',
     deterministicScore: 0.0,
@@ -222,16 +225,26 @@ async function buildPassingTestResult(
 export async function runTestingAnalyzer(rootDir: string): Promise<AnalyzerResult> {
   const testFiles = await discoverAppTests(rootDir);
   if (testFiles.length === 0) return buildEmptyTestResult();
-  const vitestBin = join(rootDir, 'node_modules', '.bin', 'vitest');
-  const res = await runShellCapture(
-    vitestBin,
-    ['run', '--reporter=json', '--coverage', '--coverage.reporter=json-summary'],
-    rootDir,
-  );
-  const report = await readVitestReport(rootDir, res.stdout);
-  const failed = report?.numFailedTests ?? (res.code === 0 ? 0 : 1);
-  if (failed > 0 || res.code !== 0) {
-    return buildFailedTestResult(testFiles.length, failed);
+  const resultDir = join(rootDir, 'testscript', 'reports');
+  await mkdir(resultDir, { recursive: true });
+  const scratch = await mkdtemp(join(resultDir, 'vitest-'));
+  try {
+    return await evaluateCurrentTestRun(rootDir, join(scratch, 'result.json'), testFiles.length);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
   }
-  return buildPassingTestResult(rootDir, testFiles.length, report);
+}
+
+async function evaluateCurrentTestRun(rootDir: string, reportPath: string, discovered: number) {
+  const vitestBin = join(rootDir, 'node_modules', '.bin', 'vitest');
+  const res = await runShellCapture(vitestBin, [
+    'run', '--reporter=json', `--outputFile=${reportPath}`,
+    '--coverage', '--coverage.reporter=json-summary',
+  ], rootDir);
+  const report = await readVitestReport(reportPath, res.stdout);
+  if (report === null) return buildFailedTestResult(discovered, 0);
+  if (report.numFailedTests > 0 || res.code !== 0) {
+    return buildFailedTestResult(discovered, report.numFailedTests);
+  }
+  return buildPassingTestResult(rootDir, discovered, report);
 }

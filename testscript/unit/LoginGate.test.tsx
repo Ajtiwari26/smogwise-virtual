@@ -234,6 +234,8 @@ describe('LoginGate bilingual mode & Header auth controls', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert').textContent).toContain('Too many sign-in attempts');
     });
+    expect(screen.getByLabelText(/Email Address/i)).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.getByLabelText(/^Password$/i)).toHaveAttribute('aria-invalid', 'false');
 
     fireEvent.click(submitBtn);
     await waitFor(() => {
@@ -244,5 +246,29 @@ describe('LoginGate bilingual mode & Header auth controls', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert').textContent).toContain('Unable to reach authentication service');
     });
+    expect(screen.getByLabelText(/Email Address/i)).toHaveAttribute('aria-invalid', 'false');
+    expect(screen.getByLabelText(/^Password$/i)).toHaveAttribute('aria-invalid', 'false');
   });
+
+  it('renders Header cleanly in unauthenticated gate mode without city or sync props', () => {
+    render(<Header language="en" onLanguageChange={vi.fn()} isAuthenticated={false} />);
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: /Select City/i })).not.toBeInTheDocument();
+  });
+});
+
+it.each(['email', 'password'])('flags only the missing %s credential', (missing) => {
+  render(
+    <LoginGate
+      language="en" isCheckingSession={false}
+      onLanguageChange={vi.fn()} onLoginSuccess={vi.fn()}
+    />,
+  );
+  const email = screen.getByLabelText(/Email Address/i);
+  const password = screen.getByLabelText(/^Password$/i);
+  if (missing === 'email') fireEvent.change(password, { target: { value: 'samplePassword' } });
+  else fireEvent.change(email, { target: { value: 'user@example.com' } });
+  fireEvent.click(screen.getByRole('button', { name: /Sign In to Dashboard/i }));
+  expect(email).toHaveAttribute('aria-invalid', String(missing === 'email'));
+  expect(password).toHaveAttribute('aria-invalid', String(missing === 'password'));
 });

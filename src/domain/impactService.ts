@@ -9,8 +9,10 @@ import {
   computeEmissionsMetrics,
   computeRawDailyEmissions,
   rankIAQHacksByBudget,
+  scaleCommunityEmissions,
+  selectAffordableHacks,
 } from './emissionsEngine.js';
-import { computeExposureMetrics } from './exposureEngine.js';
+import { computeExposureMetrics, computeSelectedDailyDose } from './exposureEngine.js';
 import {
   buildRwaNotice,
   formatLocalizedSummary,
@@ -21,10 +23,12 @@ import {
   isSameLocationTarget,
   resolveReportAq,
 } from './liveAqResolver.js';
+import { getAfternoonVentilation } from './ventilation.js';
 import { generateDailyRoutine } from './routineBuilder.js';
 import type {
   DeterministicReport,
   FullPlanOutput,
+  ExposureMetrics,
   IAQHackDetail,
   LiveAqOverride,
   UserProfile,
@@ -32,10 +36,49 @@ import type {
   WhatIfDelta,
 } from './types.js';
 
+function recommendHacks(
+  profile: UserProfile, exposure: ExposureMetrics, ranked: readonly IAQHackDetail[],
+  canVentilate: boolean,
+) {
+  const outdoor = exposure.hourlySeries?.map((hour) => hour.outdoorPm25) ?? [];
+  const applicable = ranked.filter((hack) => hack.id !== 'ventilation_window' || canVentilate);
+  return selectAffordableHacks(profile, applicable, (id) => {
+    const withHack = { ...profile, activeHacks: [...profile.activeHacks, id] };
+    return exposure.optimizedInhaledUgPerDay - computeSelectedDailyDose(withHack, outdoor);
+  });
+}
+
+function buildUnavailableExposure(): ExposureMetrics {
+  return {
+    baselineInhaledUgPerDay: 0,
+    optimizedInhaledUgPerDay: 0,
+    doseReductionUgPerDay: 0,
+    doseReductionPercent: 0,
+    baselineIndoorPm25: 0,
+    optimizedIndoorPm25: 0,
+    optimalVentilationWindow: 'Unavailable',
+  };
+}
+
+/** Reconstructs the authoritative LiveAqOverride from a DeterministicReport when live. */
+export function extractReportLiveAq(report: DeterministicReport): LiveAqOverride | undefined {
+  if (report.dataSource !== 'live_open_meteo') return undefined;
+  const sourceLabel = report.citations['AQ:SOURCE'];
+  return {
+    pm25: report.city.baselinePm25,
+    cpcbAqi: report.cpcbAqi,
+    dominantPollutant: report.dominantPollutant,
+    ...(report.livePm10 !== undefined ? { pm10: report.livePm10 } : {}),
+    ...(report.liveNo2 !== undefined ? { no2: report.liveNo2 } : {}),
+    ...(report.observedAt !== undefined ? { observedAt: report.observedAt } : {}),
+    ...(sourceLabel !== undefined ? { sourceLabel } : {}),
+  };
+}
+
 function buildDeterministicReport(
   profile: UserProfile,
   liveAq: LiveAqOverride | undefined,
-  rankedHacks: readonly IAQHackDetail[],
+  ranked: readonly IAQHackDetail[],
 ): DeterministicReport {
   const { sourceLabel, ...aq } = resolveReportAq(profile, liveAq);
   const { city, dataSource, livePm10, liveNo2 } = aq;
@@ -43,10 +86,16 @@ function buildDeterministicReport(
     dataSource === 'live_open_meteo'
       ? computeCpcbAqi(city.baselinePm25, livePm10, liveNo2)
       : computeCpcbAqi(city.baselinePm25, city.baselinePm10, city.baselineNo2);
-  const exposure = computeExposureMetrics(profile, city.baselinePm25);
+  const exposure = aq.aqStatus === 'unavailable'
+    ? buildUnavailableExposure()
+    : computeExposureMetrics(profile, city.baselinePm25);
   const emissions = computeEmissionsMetrics(profile);
-  const recommendedHacks = rankedHacks.map((hack) => hack.id);
-  const citations = buildCitations(city, dataSource, exposure, emissions, sourceLabel);
+  const vent = getAfternoonVentilation({ ...aq, exposure });
+  const recommendedHacks = aq.aqStatus === 'unavailable'
+    ? [] : recommendHacks(profile, exposure, ranked, vent.canVentilate);
+  const citations = buildCitations(
+    city, dataSource, exposure, emissions, sourceLabel, aq.aqStatus,
+  );
 
   return {
     ...aq,
@@ -70,6 +119,16 @@ export function computeDeterministicReport(
   return buildDeterministicReport(profile, liveAq, rankIAQHacksByBudget(profile));
 }
 
+/** Overlays RWA community savings onto a plan without recomputing exposure or routine. */
+export function buildRwaScaledPlan(basePlan: FullPlanOutput, profile: UserProfile): FullPlanOutput {
+  const community = scaleCommunityEmissions(profile);
+  const report: DeterministicReport = {
+    ...basePlan.report,
+    emissions: { ...basePlan.report.emissions, ...community },
+  };
+  return { ...basePlan, report, rwaNotice: buildRwaNotice(profile, report) };
+}
+
 /**
  * Computes the complete localized daily plan, ranked IAQ hacks, and RWA notice.
  */
@@ -79,7 +138,7 @@ export function computeFullPlan(
 ): FullPlanOutput {
   const iaqHacks = rankIAQHacksByBudget(profile);
   const report = buildDeterministicReport(profile, liveAq, iaqHacks);
-  const routine = generateDailyRoutine(profile, report);
+  const routine = report.aqStatus === 'unavailable' ? [] : generateDailyRoutine(profile, report);
   const localizedSummary = formatLocalizedSummary(report, profile.language);
   const rwaNotice = buildRwaNotice(profile, report);
 
@@ -103,10 +162,27 @@ export function compareWhatIf(
   alternativeLiveAq?: LiveAqOverride,
 ): WhatIfComparisonResult {
   const sharedLiveAq = isSameLocationTarget(baseline, alternative) ? baselineLiveAq : undefined;
-  const baselineReport = computeDeterministicReport(baseline, baselineLiveAq);
+  return compareWhatIfFromBaseline(
+    baseline, computeDeterministicReport(baseline, baselineLiveAq),
+    alternative, alternativeLiveAq ?? sharedLiveAq,
+  );
+}
+
+/** Compares an alternative using the household report already displayed on screen. */
+export function compareWhatIfFromBaseline(
+  baseline: UserProfile,
+  baselineReport: DeterministicReport,
+  alternative: UserProfile,
+  alternativeLiveAq?: LiveAqOverride,
+): WhatIfComparisonResult {
+  const effectiveAltAq = alternativeLiveAq ?? (
+    isSameLocationTarget(baseline, alternative)
+      ? extractReportLiveAq(baselineReport)
+      : undefined
+  );
   const alternativeReport = computeDeterministicReport(
     alternative,
-    alternativeLiveAq ?? sharedLiveAq,
+    effectiveAltAq,
   );
   const baseRaw = computeRawDailyEmissions(baseline);
   const altRaw = computeRawDailyEmissions(alternative);

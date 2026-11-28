@@ -45,18 +45,20 @@ export const UserProfileSchema = z
   })
   .strict();
 
-/** Zod schema validating a wrapped `{ profile, useLiveAq? }` plan request envelope. */
+/** Zod schema validating a wrapped `{ profile, useLiveAq?, snapshotToken? }` plan envelope. */
 export const WrappedProfileEnvelopeSchema = z
   .object({
     profile: UserProfileSchema,
     useLiveAq: z.boolean().optional(),
+    snapshotToken: z.string().min(20).max(2048).optional(),
   })
   .strict();
 
-/** Zod schema validating a strict `{ profile }` user-preferences envelope. */
+/** Zod schema validating a strict `{ profile, expectedVersion? }` preferences envelope. */
 export const PreferencesEnvelopeSchema = z
   .object({
     profile: UserProfileSchema,
+    expectedVersion: z.number().int().min(0).max(1_000_000).optional(),
   })
   .strict();
 
@@ -90,6 +92,7 @@ export const AiAskSchema = z
       .optional(),
     language: z.enum(LANGUAGE_CODES).optional(),
     profile: UserProfileSchema.optional(),
+    snapshotToken: z.string().min(20).max(2048).optional(),
   })
   .strict()
   .refine((data) => Boolean(data.question ?? data.query), {

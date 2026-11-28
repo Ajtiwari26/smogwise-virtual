@@ -58,7 +58,8 @@ function resolveCookingFactor(fuel: CookingFuel) {
     : COOKING_DAILY_FACTORS.lpg;
 }
 
-function sumActiveHacksCostInr(activeHacks: readonly IAQHackId[]): number {
+/** Totals unique selected interventions at their catalog monthly prices. */
+export function sumActiveHacksCostInr(activeHacks: readonly IAQHackId[]): number {
   let total = 0;
   for (const id of new Set(activeHacks)) {
     if (Object.hasOwn(IAQ_HACK_SPECS, id)) {
@@ -86,49 +87,53 @@ export function computeRawDailyEmissions(profile: UserProfile): RawDailyEmission
   return { co2eGramsPerDay, pm25MgPerDay, monthlyOperatingCostInr };
 }
 
+/** Scales commuting over 22 days and cooking over 30 days per month. */
+export function scaleCommunityEmissions(
+  profile: UserProfile,
+): Pick<EmissionsMetrics, 'communityCo2eAvoidedKgPerMonth' | 'communityPm25AvoidedGramsPerMonth'> {
+  const activeHomes =
+    clampHouseholds(profile.rwaHouseholds, MAX_RWA_HOUSEHOLDS)
+    * clampAdoptionRate(profile.rwaAdoptionRate);
+  const commute = resolveCommuteFactor(profile.commuteMode);
+  const cooking = resolveCookingFactor(profile.cookingFuel);
+  const commuteKm = clampDistanceKm(profile.commuteDistanceKm) * COMMUTE_DAYS_PER_MONTH;
+  const car = COMMUTE_EMISSION_FACTORS.petrol_car;
+  const lpg = COOKING_DAILY_FACTORS.lpg;
+  const co2e = (car.co2eGramsPerKm - commute.co2eGramsPerKm) * commuteKm
+    + (lpg.co2eGramsPerDay - cooking.co2eGramsPerDay) * DAYS_PER_MONTH;
+  const pm25 = (car.pm25MgPerKm - commute.pm25MgPerKm) * commuteKm
+    + (lpg.pm25MgPerDay - cooking.pm25MgPerDay) * DAYS_PER_MONTH;
+  return {
+    communityCo2eAvoidedKgPerMonth: round2(co2e * activeHomes / 1000),
+    communityPm25AvoidedGramsPerMonth: round2(pm25 * activeHomes / 1000),
+  };
+}
+
 /**
- * Computes household emissions avoided vs. petrol car & LPG baseline, plus RWA scaling.
+ * Computes household emissions net delta vs. petrol car & LPG baseline, plus RWA scaling.
+ * Negative avoided values indicate net emissions increases relative to baseline.
  */
 export function computeEmissionsMetrics(profile: UserProfile): EmissionsMetrics {
-  const km = clampDistanceKm(profile.commuteDistanceKm);
-  const baseCommute = COMMUTE_EMISSION_FACTORS.petrol_car;
-  const userCommute = resolveCommuteFactor(profile.commuteMode);
-  const baseCooking = COOKING_DAILY_FACTORS.lpg;
-  const userCooking = resolveCookingFactor(profile.cookingFuel);
+  const baselineProfile: UserProfile = {
+    ...profile,
+    commuteMode: 'petrol_car',
+    cookingFuel: 'lpg',
+    activeHacks: [],
+  };
+  const baseRaw = computeRawDailyEmissions(baselineProfile);
+  const userRaw = computeRawDailyEmissions(profile);
 
-  const commuteCo2Saved = Math.max(
-    0,
-    (baseCommute.co2eGramsPerKm - userCommute.co2eGramsPerKm) * km,
-  );
-  const cookCo2Saved = Math.max(0, baseCooking.co2eGramsPerDay - userCooking.co2eGramsPerDay);
-  const co2eAvoidedGramsPerDay = round2(commuteCo2Saved + cookCo2Saved);
-
-  const commutePmSaved = Math.max(0, (baseCommute.pm25MgPerKm - userCommute.pm25MgPerKm) * km);
-  const cookPmSaved = Math.max(0, baseCooking.pm25MgPerDay - userCooking.pm25MgPerDay);
-  const pm25AvoidedMgPerDay = round2(commutePmSaved + cookPmSaved);
-
-  const commuteCostSaved =
-    (baseCommute.costInrPerKm - userCommute.costInrPerKm) * km * COMMUTE_DAYS_PER_MONTH;
-  const cookCostSaved = baseCooking.monthlyCostInr - userCooking.monthlyCostInr;
-  const hacksCost = sumActiveHacksCostInr(profile.activeHacks);
-  const monthlyNetSavingsInr = round2(commuteCostSaved + cookCostSaved - hacksCost);
-
-  const activeHomes =
-    clampHouseholds(profile.rwaHouseholds, MAX_RWA_HOUSEHOLDS) *
-    clampAdoptionRate(profile.rwaAdoptionRate);
-  const communityCo2eAvoidedKgPerMonth = round2(
-    ((co2eAvoidedGramsPerDay * DAYS_PER_MONTH) / 1000) * activeHomes,
-  );
-  const communityPm25AvoidedGramsPerMonth = round2(
-    ((pm25AvoidedMgPerDay * DAYS_PER_MONTH) / 1000) * activeHomes,
+  const co2eAvoidedGramsPerDay = round2(baseRaw.co2eGramsPerDay - userRaw.co2eGramsPerDay);
+  const pm25AvoidedMgPerDay = round2(baseRaw.pm25MgPerDay - userRaw.pm25MgPerDay);
+  const monthlyNetSavingsInr = round2(
+    baseRaw.monthlyOperatingCostInr - userRaw.monthlyOperatingCostInr,
   );
 
   return {
     co2eAvoidedGramsPerDay,
     pm25AvoidedMgPerDay,
     monthlyNetSavingsInr,
-    communityCo2eAvoidedKgPerMonth,
-    communityPm25AvoidedGramsPerMonth,
+    ...scaleCommunityEmissions(profile),
   };
 }
 
@@ -138,12 +143,15 @@ export function computeEmissionsMetrics(profile: UserProfile): EmissionsMetrics 
 export function rankIAQHacksByBudget(profile: UserProfile): readonly IAQHackDetail[] {
   const budget = clampFinite(profile.monthlyBudgetInr, 0, Number.MAX_SAFE_INTEGER, 0);
   const activeSet = new Set<IAQHackId>(profile.activeHacks);
+  const activeSpend = sumActiveHacksCostInr(profile.activeHacks);
   const withinBudget: IAQHackDetail[] = [];
   const overBudget: IAQHackDetail[] = [];
 
   for (const id of ALL_HACK_IDS) {
     const spec = IAQ_HACK_SPECS[id];
-    const affordable = spec.monthlyCostInr <= budget;
+    const selected = activeSet.has(id);
+    const total = activeSpend + (selected ? 0 : spec.monthlyCostInr);
+    const affordable = spec.monthlyCostInr === 0 || total <= budget;
     const detail: IAQHackDetail = {
       id: spec.id,
       name: spec.name,
@@ -154,7 +162,7 @@ export function rankIAQHacksByBudget(profile: UserProfile): readonly IAQHackDeta
       doseImpactLabel: spec.doseImpactLabel,
       doseImpactLabelHi: spec.doseImpactLabelHi,
       withinBudget: affordable,
-      isActive: activeSet.has(id),
+      isActive: selected,
     };
     if (affordable) {
       withinBudget.push(detail);
@@ -164,4 +172,31 @@ export function rankIAQHacksByBudget(profile: UserProfile): readonly IAQHackDeta
   }
 
   return [...withinBudget, ...overBudget];
+}
+
+/** Recommends jointly affordable interventions in order of modeled benefit within each tier. */
+export function selectAffordableHacks(
+  profile: UserProfile,
+  ranked: readonly IAQHackDetail[],
+  assess: (id: IAQHackId) => number,
+): readonly IAQHackId[] {
+  const affordable = ranked.filter((hack) => hack.withinBudget);
+  const existing = affordable.filter((hack) => hack.isActive).map((hack) => hack.id);
+  const candidates = affordable
+    .filter((hack) => !hack.isActive)
+    .map((hack) => ({ hack, benefit: assess(hack.id) }))
+    .filter(({ benefit }) => benefit > 0)
+    .sort((a, b) => freeFirst(a.hack, b.hack) || b.benefit - a.benefit);
+  const selectedSpend = sumActiveHacksCostInr(profile.activeHacks);
+  let remaining = Math.max(0, profile.monthlyBudgetInr - selectedSpend);
+  for (const { hack } of candidates) {
+    if (hack.monthlyCostInr > remaining) continue;
+    remaining -= hack.monthlyCostInr;
+    existing.push(hack.id);
+  }
+  return existing;
+}
+
+function freeFirst(a: IAQHackDetail, b: IAQHackDetail): number {
+  return Number(b.monthlyCostInr === 0) - Number(a.monthlyCostInr === 0);
 }

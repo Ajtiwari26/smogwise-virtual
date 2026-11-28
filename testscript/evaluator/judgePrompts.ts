@@ -168,10 +168,13 @@ function ratioForCriterion(results: readonly AnalyzerResult[], criterion: Criter
   return clamp(found.deterministicScore / found.maxDeterministic, 0, 1);
 }
 
-/** Computes deterministic 80%-capped AI fallback scores when no judge API keys are configured. */
+/**
+ * Computes deterministic 80%-capped AI fallback scores when live AI judge fails or keys are absent.
+ */
 export function buildColdFallback(
   deterministicResults: readonly AnalyzerResult[],
   okProbes: number,
+  keysConfigured = false,
 ): AIJudgeResult {
   const cap = 0.8;
   const scale = (k: CriterionKey, max: number): number =>
@@ -184,19 +187,20 @@ export function buildColdFallback(
     testing_ai: scale('testing', MAX_SCORES.testing_ai),
     accessibility_ai: scale('accessibility', MAX_SCORES.accessibility_ai),
   };
+  const reason = keysConfigured
+    ? 'Live AI judge request failed or timed out; 80% deterministic fallback applied.'
+    : 'Offline cold rubric active (no live AI judge keys); AI share capped at 80%.';
+  const fix = keysConfigured
+    ? 'Verify upstream Gemini/OpenAI quota and network reachability for live AI grading.'
+    : 'Set GEMINI_API_KEY (and optionally OPENAI_API_KEY) for live cross-model grading.';
   const deductions: DeductionItem[] = [
-    makeDeduction(
-      'alignment',
-      round2(MAX_SCORES.alignment_ai * 0.2),
-      'Offline cold rubric active (no live AI judge keys); AI share capped at 80%.',
-      'Set GEMINI_API_KEY (and optionally OPENAI_API_KEY) for live cross-model grading.',
-    ),
+    makeDeduction('alignment', round2(MAX_SCORES.alignment_ai * 0.2), reason, fix),
   ];
   return {
     mode: 'offline_cold_rubric',
     modelsUsed: ['offline_cold_rubric'],
     scores,
     deductions,
-    verdict: `Offline cold rubric (80% AI cap). Live persona probes reachable: ${okProbes}/5.`,
+    verdict: `Offline cold rubric (80% AI cap). Persona probes with expected outcomes: ${okProbes}/5.`,
   };
 }

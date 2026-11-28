@@ -18,6 +18,20 @@ describe('hashCacheKey canonical determinism', () => {
     expect(keyA).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it('distinguishes reserved values from lookalikes and orders equal map keys by value', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic['self'] = cyclic;
+    expect(hashCacheKey(cyclic)).not.toBe(hashCacheKey({ self: '[Circular]' }));
+    expect(hashCacheKey(new Date(0))).not.toBe(hashCacheKey({
+      __type: 'Date', value: new Date(0).toISOString(),
+    }));
+    expect(hashCacheKey(new Array(1))).not.toBe(hashCacheKey([undefined]));
+    const keyA = { a: 1 };
+    const keyB = { a: 1 };
+    expect(hashCacheKey(new Map([[keyA, 2], [keyB, 3]])))
+      .toBe(hashCacheKey(new Map([[keyB, 3], [keyA, 2]])));
+  });
+
   it('produces distinct digests for different values', () => {
     const keyA = hashCacheKey({ city: 'delhi', budget: 1200 });
     const keyB = hashCacheKey({ city: 'delhi', budget: 6000 });
@@ -103,9 +117,44 @@ describe('LruCache eviction & TTL expiry', () => {
     const p2Join = sf.run('race', async () => 'unexpected');
     expect(p2Join).toBe(p2);
 
+    await Promise.resolve();
     finishFirst('first');
     expect(await p1).toBe('first');
     finishSecond('second');
     expect(await p2).toBe('second');
   });
+});
+
+it('bounds active jobs across clear and still shares admitted work', async () => {
+  const sf = createSingleflight<number>(1);
+  let release: ((value: number) => void) | undefined;
+  const work = vi.fn(() => new Promise<number>((resolve) => { release = resolve; }));
+  const first = sf.run('first', work);
+  expect(sf.run('first', work)).toBe(first);
+  sf.clear();
+  expect(await sf.run('second', work, () => 0)).toBe(0);
+  expect(work).toHaveBeenCalledTimes(1);
+  release?.(1);
+  expect(await first).toBe(1);
+  expect(await sf.run('second', async () => 2)).toBe(2);
+});
+
+it('provides a cache-write guard after a clear and faster replacement', async () => {
+  const sf = createSingleflight<number>(2);
+  const cache = createLruCache<number>();
+  let release: (() => void) | undefined;
+  const first = sf.run('key', async (isCurrent) => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    if (isCurrent()) cache.set('key', 1);
+    return 1;
+  });
+  await Promise.resolve();
+  sf.clear();
+  await sf.run('key', async (isCurrent) => {
+    if (isCurrent()) cache.set('key', 2);
+    return 2;
+  });
+  release?.();
+  expect(await first).toBe(1);
+  expect(cache.get('key')).toBe(2);
 });

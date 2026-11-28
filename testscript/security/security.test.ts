@@ -105,7 +105,10 @@ describe('HTTP security headers, CORS, Zod, payload limits & SSRF', () => {
       .set('Content-Type', 'application/json')
       .send('{"cityId":');
     expect(malformed.status).toBe(400);
-    expect(malformed.body.error).toBe('Malformed JSON request body.');
+    expect(malformed.body).toEqual({
+      error: 'MALFORMED_JSON',
+      message: 'Malformed JSON request body.',
+    });
 
     const commaCrossSite = await request(app)
       .post('/api/plan')

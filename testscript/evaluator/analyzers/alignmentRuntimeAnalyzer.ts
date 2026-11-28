@@ -3,6 +3,7 @@
  */
 
 import path from 'node:path';
+import type { Server } from 'node:http';
 import type { AnalyzerResult, DeductionItem } from '../types.js';
 import {
   closeServerSafely,
@@ -25,7 +26,7 @@ const MAX_DETERMINISTIC = 12.0;
 const SCENARIO_POINTS = round2(12 / 5);
 const CAP_SCORE = 15.0;
 
-function makeMissingServerResult(): AnalyzerResult {
+function makeMissingServerResult(reason: string): AnalyzerResult {
   return {
     criterion: 'alignment',
     deterministicScore: 0,
@@ -35,7 +36,7 @@ function makeMissingServerResult(): AnalyzerResult {
       makeDeduction(
         'alignment',
         MAX_DETERMINISTIC,
-        'server/app.ts not implemented or missing createApp export.',
+        reason,
         'Export createApp() from server/app.ts implementing /api/plan and /api/what-if.',
       ),
     ],
@@ -73,10 +74,13 @@ export async function runAlignmentRuntimeAnalyzer(rootDir: string): Promise<Anal
   const mod = await safeDynamicImport(path.join(rootDir, 'server', 'app.ts'));
   const app = resolveExpressApp(mod);
   if (app === null) {
-    return makeMissingServerResult();
+    return makeMissingServerResult('server/app.ts or createApp is unavailable.');
   }
-  const { server, baseUrl } = await startEphemeralServer(app);
+  let server: Server | null = null;
   try {
+    const started = await startEphemeralServer(app);
+    server = started.server;
+    const { baseUrl } = started;
     const outcomes = await Promise.all([
       runScenario1(baseUrl),
       runScenario2(baseUrl),
@@ -85,6 +89,9 @@ export async function runAlignmentRuntimeAnalyzer(rootDir: string): Promise<Anal
       runScenario5(baseUrl),
     ]);
     return buildResult(outcomes);
+  } catch (err: unknown) {
+    const reason = err instanceof Error ? err.message : 'Unknown runtime probe error';
+    return makeMissingServerResult(`Runtime alignment probes unavailable: ${reason}`);
   } finally {
     await closeServerSafely(server);
   }

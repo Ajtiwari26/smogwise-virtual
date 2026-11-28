@@ -1,5 +1,13 @@
 /** Runtime validators for nested values returned by the SmogWise API. */
 
+import {
+  MAX_BUDGET_INR,
+  MAX_COMMUTE_KM,
+  MAX_HOUSEHOLD_SIZE,
+  MAX_ROOM_VOLUME_M3,
+  MAX_RWA_HOUSEHOLDS,
+  MIN_ROOM_VOLUME_M3,
+} from '../domain/constants.js';
 import { isPlainRecord } from '../domain/domainUtils.js';
 import {
   COMMUTE_MODES,
@@ -54,7 +62,7 @@ export function isAqMetadata(record: Record<string, unknown>): boolean {
     isOneOf(record['dataSource'], ['live_open_meteo', 'city_preset']) &&
     isOneOf(record['aqiBand'], ['good', 'satisfactory', 'moderate', 'poor', 'very_poor', 'severe']) &&
     isOneOf(record['dominantPollutant'], ['PM2.5', 'PM10', 'NO2']) &&
-    hasOptionalStrings(record, 'observedAt', 'fallbackStationName') &&
+    hasOptionalStrings(record, 'observedAt', 'fallbackStationName', 'observationId') &&
     hasOptionalNumbers(record, 'fallbackDistanceKm');
 }
 
@@ -105,13 +113,33 @@ export function isIaqHackList(value: unknown): boolean {
   return Array.isArray(value) && value.every((id: unknown) => isOneOf(id, IAQ_HACK_IDS));
 }
 
-/** Validates a returned household profile including optional RWA and coordinate fields. */
+function inRange(value: unknown, min: number, max: number): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
+}
+
+function hasBoundedProfileNumbers(value: Record<string, unknown>): boolean {
+  return Number.isInteger(value['householdSize']) &&
+    inRange(value['householdSize'], 1, MAX_HOUSEHOLD_SIZE) &&
+    inRange(value['monthlyBudgetInr'], 0, MAX_BUDGET_INR) &&
+    inRange(value['roomVolumeM3'], MIN_ROOM_VOLUME_M3, MAX_ROOM_VOLUME_M3) &&
+    inRange(value['commuteDistanceKm'], 0, MAX_COMMUTE_KM);
+}
+
+function hasBoundedRwaFields(value: Record<string, unknown>): boolean {
+  const households = value['rwaHouseholds'];
+  const hhOk = households === undefined ||
+    (Number.isInteger(households) && inRange(households, 1, MAX_RWA_HOUSEHOLDS));
+  const rateOk = value['rwaAdoptionRate'] === undefined || inRange(value['rwaAdoptionRate'], 0, 1);
+  return hhOk && rateOk;
+}
+
+/** Validates a returned household profile including bounded numeric and coordinate fields. */
 export function isProfile(value: unknown): boolean {
   return isPlainRecord(value) &&
     isNonEmptyString(value['cityId']) &&
     hasProfileChoices(value) &&
-    hasNumbers(value, 'householdSize', 'monthlyBudgetInr', 'roomVolumeM3', 'commuteDistanceKm') &&
+    hasBoundedProfileNumbers(value) &&
     typeof value['hasVulnerableMember'] === 'boolean' &&
-    hasOptionalNumbers(value, 'rwaHouseholds', 'rwaAdoptionRate') &&
+    hasBoundedRwaFields(value) &&
     (value['customLocation'] === undefined || isCustomLocation(value['customLocation']));
 }

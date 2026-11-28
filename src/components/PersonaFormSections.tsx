@@ -2,8 +2,15 @@
  * Accessible sub-sections for PersonaForm with semantic fieldsets and range validation hints.
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { CITY_PRESETS } from '../domain/cityPresets.js';
+import {
+  MAX_BUDGET_INR,
+  MAX_COMMUTE_KM,
+  MAX_HOUSEHOLD_SIZE,
+  MAX_ROOM_VOLUME_M3,
+  MIN_ROOM_VOLUME_M3,
+} from '../domain/constants.js';
 import type {
   LocationSearchItem,
   UserProfile,
@@ -17,12 +24,10 @@ import {
   SelectField,
 } from './PersonaSelectFields.js';
 
-function clampInt(raw: string, fallback: number, min: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, Math.round(n)));
+function parseField(raw: string, min: number, max: number, integer: boolean): number | undefined {
+  const value = Number(raw);
+  if (raw.trim() === '' || !Number.isFinite(value) || value < min || value > max) return undefined;
+  return !integer || Number.isInteger(value) ? value : undefined;
 }
 
 interface NumericBoxProps {
@@ -32,14 +37,21 @@ interface NumericBoxProps {
   readonly value: number;
   readonly min: number;
   readonly max: number;
-  readonly step?: number;
+  readonly integer?: boolean;
   readonly onChangeValue: (val: number) => void;
 }
 
 function NumericBox(props: NumericBoxProps): React.JSX.Element {
-  const { id, label, hint, value, min, max, step, onChangeValue } = props;
+  const { id, label, hint, value, min, max, integer = false, onChangeValue } = props;
   const hintId = `${id}-hint`;
-  const isOutOfRange = !Number.isFinite(value) || value < min || value > max;
+  const [draft, setDraft] = useState<string>(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const isOutOfRange = parseField(draft, min, max, integer) === undefined;
+
   return (
     <div>
       <label htmlFor={id} className="block text-xs font-semibold text-slate-800">{label}</label>
@@ -48,11 +60,19 @@ function NumericBox(props: NumericBoxProps): React.JSX.Element {
         type="number"
         min={min}
         max={max}
-        {...(step !== undefined ? { step } : {})}
-        value={value}
+        step={integer ? 1 : 'any'}
+        value={draft}
         aria-invalid={isOutOfRange}
         aria-describedby={hintId}
-        onChange={(e) => onChangeValue(clampInt(e.target.value, min, min, max))}
+        onChange={(e) => {
+          const next = e.target.value;
+          setDraft(next);
+          const valid = parseField(next, min, max, integer);
+          if (valid !== undefined) onChangeValue(valid);
+        }}
+        onBlur={() => {
+          setDraft(String(value));
+        }}
         className={INPUT_CLS}
       />
       <span
@@ -77,20 +97,20 @@ export const HouseholdNumericFields: React.FC<{
         <NumericBox
           id="household-size"
           label={isHi ? 'सदस्य संख्या' : 'Household Size'}
-          hint={isHi ? 'सीमा: 1–12 सदस्य' : 'Range: 1–12 members'}
+          hint={isHi ? `सीमा: 1–${MAX_HOUSEHOLD_SIZE} सदस्य` : `Range: 1–${MAX_HOUSEHOLD_SIZE} members`}
           value={profile.householdSize}
           min={1}
-          max={12}
+          max={MAX_HOUSEHOLD_SIZE}
+          integer
           onChangeValue={(householdSize) => onUpdate({ householdSize })}
         />
         <NumericBox
           id="monthly-budget"
           label={isHi ? 'मासिक बजट (₹)' : 'Monthly Budget (₹)'}
-          hint={isHi ? 'सीमा: ₹0–₹50,000' : 'Range: ₹0–₹50,000'}
+          hint={isHi ? 'सीमा: ₹0–₹5,00,000' : 'Range: ₹0–₹500,000'}
           value={profile.monthlyBudgetInr}
           min={0}
-          max={50000}
-          step={250}
+          max={MAX_BUDGET_INR}
           onChangeValue={(monthlyBudgetInr) => onUpdate({ monthlyBudgetInr })}
         />
       </div>
@@ -98,19 +118,23 @@ export const HouseholdNumericFields: React.FC<{
         <NumericBox
           id="room-volume"
           label={isHi ? 'कमरे का आयतन (m³)' : 'Room Volume (m³)'}
-          hint={isHi ? 'सीमा: 12–500 m³' : 'Range: 12–500 m³'}
+          hint={
+            isHi
+              ? `सीमा: ${MIN_ROOM_VOLUME_M3}–${MAX_ROOM_VOLUME_M3} m³`
+              : `Range: ${MIN_ROOM_VOLUME_M3}–${MAX_ROOM_VOLUME_M3} m³`
+          }
           value={profile.roomVolumeM3}
-          min={12}
-          max={500}
+          min={MIN_ROOM_VOLUME_M3}
+          max={MAX_ROOM_VOLUME_M3}
           onChangeValue={(roomVolumeM3) => onUpdate({ roomVolumeM3 })}
         />
         <NumericBox
           id="commute-km"
           label={isHi ? 'दैनिक यात्रा (km)' : 'Commute (km/day)'}
-          hint={isHi ? 'सीमा: 0–150 km' : 'Range: 0–150 km'}
+          hint={isHi ? `सीमा: 0–${MAX_COMMUTE_KM} km` : `Range: 0–${MAX_COMMUTE_KM} km`}
           value={profile.commuteDistanceKm}
           min={0}
-          max={150}
+          max={MAX_COMMUTE_KM}
           onChangeValue={(commuteDistanceKm) => onUpdate({ commuteDistanceKm })}
         />
       </div>
@@ -175,11 +199,13 @@ const CUSTOM_CITY_OPTION = '__custom_location__';
 /** Pan-India location combobox paired with major winter smog preset city selector. */
 export const LocationSectionFields: React.FC<{
   readonly profile: UserProfile;
+  readonly presetSelectionRevision: number | string;
   readonly isHi: boolean;
   readonly onSelectLocation: (item: LocationSearchItem) => void;
   readonly onSelectPresetCity: (cityId: string) => void;
 }> = React.memo(function LocationSectionFields({
   profile,
+  presetSelectionRevision,
   isHi,
   onSelectLocation,
   onSelectPresetCity,
@@ -191,6 +217,7 @@ export const LocationSectionFields: React.FC<{
       <LocationSearchCombobox
         language={profile.language}
         customLocation={customLoc}
+        presetSelectionRevision={presetSelectionRevision}
         onSelectLocation={onSelectLocation}
       />
       <div>

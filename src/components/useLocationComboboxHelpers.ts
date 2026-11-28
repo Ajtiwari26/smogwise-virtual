@@ -2,11 +2,12 @@
  * Keyboard navigation, display formatting, and geolocation helpers for LocationSearchCombobox.
  */
 
-import type { Dispatch, SetStateAction } from 'react';
+import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from 'react';
 import { useCallback, useEffect, useRef } from 'react';
 import { isWithinIndiaCoords } from '../domain/cityPresets.js';
 import { round4 } from '../domain/domainUtils.js';
 import type { LocationSearchItem } from '../domain/types.js';
+import { isSearchResultDegraded, searchLocations } from '../services/apiClient.js';
 
 /** Interactive state for LocationSearchCombobox results and keyboard navigation. */
 export interface SearchState {
@@ -96,12 +97,79 @@ export function computeNextKeyState(
 
 const GEO_TIMEOUT_MS = 8000;
 
-/** Returns a geolocation handler that discards callbacks after unmount or a newer request. */
+/** Extracts primary city prefix before first comma for location search. */
+export function extractCitySearchTerm(rawQuery: string): string {
+  const trimmed = rawQuery.trim();
+  const commaIdx = trimmed.indexOf(',');
+  return commaIdx === -1 ? trimmed : trimmed.slice(0, commaIdx).trim();
+}
+
+function formatEmptySearchStatus(isHindi: boolean, degraded?: boolean): string {
+  if (degraded) {
+    return isHindi
+      ? 'लाइव स्थान खोज उपलब्ध नहीं है; कृपया पुनः प्रयास करें या प्रीसेट चुनें।'
+      : 'Live location search is unavailable; please retry or choose a preset.';
+  }
+  return isHindi ? 'कोई मेल खाने वाला भारतीय शहर नहीं मिला।' : 'No matching Indian locations found.';
+}
+
+/** Dispatches debounced geocoding search request with degraded empty-state messaging. */
+export function runDebouncedQuery(
+  query: string,
+  isHindi: boolean,
+  signal: AbortSignal,
+  canOpenRef: RefObject<boolean>,
+  setSearchState: Dispatch<SetStateAction<SearchState>>,
+  setStatusMessage: Dispatch<SetStateAction<string>>,
+): void {
+  void searchLocations(extractCitySearchTerm(query), signal)
+    .then((items) => {
+      if (signal.aborted) return;
+      const isOpen = canOpenRef.current && items.length > 0;
+      setSearchState({
+        results: items,
+        isOpen,
+        isSearching: false,
+        activeIndex: isOpen ? 0 : -1,
+        resultQuery: query,
+      });
+      if (items.length === 0) {
+        setStatusMessage(formatEmptySearchStatus(isHindi, isSearchResultDegraded(items)));
+      }
+    })
+    .catch((err: unknown) => {
+      void err;
+      if (signal.aborted) return;
+      setSearchState(INITIAL_SEARCH_STATE);
+      setStatusMessage(
+        isHindi ? 'स्थान खोज विफल रही। पुनः प्रयास करें।' : 'Location search failed. Please retry.',
+      );
+    });
+}
+
+/** Closes location suggestions popup when user clicks outside container. */
+export function useOutsideDismiss(
+  containerRef: RefObject<HTMLDivElement | null>,
+  closeSuggestions: () => void,
+): void {
+  useEffect(() => {
+    const onDocDown = (event: MouseEvent): void => {
+      const target = event.target;
+      const el = containerRef.current;
+      if (el !== null && target instanceof Node && !el.contains(target)) closeSuggestions();
+    };
+    document.addEventListener('mousedown', onDocDown);
+    return () => document.removeEventListener('mousedown', onDocDown);
+  }, [containerRef, closeSuggestions]);
+}
+
+/** Returns a geolocation handler discarding stale callbacks cleanly. */
 export function useGeolocationTrigger(
   isHindi: boolean,
   commitSelection: (item: LocationSearchItem) => void,
   setIsLocating: Dispatch<SetStateAction<boolean>>,
   setStatusMessage: Dispatch<SetStateAction<string>>,
+  selectionEpochRef: MutableRefObject<number>,
 ): () => void {
   const mountedRef = useRef<boolean>(true);
   const geoReqIdRef = useRef<number>(0);
@@ -120,11 +188,13 @@ export function useGeolocationTrigger(
       return;
     }
     const reqId = ++geoReqIdRef.current;
+    const startEpoch = selectionEpochRef.current;
     setIsLocating(true);
     setStatusMessage(isHindi ? 'आपकी लोकेशन जांची जा रही है...' : 'Detecting your location...');
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         if (!mountedRef.current || reqId !== geoReqIdRef.current) return;
+        if (startEpoch !== selectionEpochRef.current) return;
         setIsLocating(false);
         const lat = round4(pos.coords.latitude);
         const lon = round4(pos.coords.longitude);
@@ -142,10 +212,11 @@ export function useGeolocationTrigger(
       },
       (err) => {
         if (!mountedRef.current || reqId !== geoReqIdRef.current) return;
+        if (startEpoch !== selectionEpochRef.current) return;
         setIsLocating(false);
         setStatusMessage(resolveGeoErrorMessage(err, isHindi));
       },
       { enableHighAccuracy: false, timeout: GEO_TIMEOUT_MS, maximumAge: 60000 },
     );
-  }, [isHindi, commitSelection, setIsLocating, setStatusMessage]);
+  }, [isHindi, commitSelection, setIsLocating, setStatusMessage, selectionEpochRef]);
 }

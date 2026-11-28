@@ -15,7 +15,7 @@ SmogWise Virtual uses a **Two-Tier Hybrid Architecture** so every number is audi
    - **Transient Single-Zone Indoor Mass Balance:**
      $$C_{\text{steady}}(h) = \frac{P \cdot \text{ACH}(h) \cdot C_{\text{out}}(h) + E_{\text{cook}}(h)/V}{r(h)}, \quad C_{\text{in}}(h) = C_{\text{steady}}(h) + \bigl(C_{\text{in}}(h-1) - C_{\text{steady}}(h)\bigr)e^{-r(h)}$$
      where $r(h) = \text{ACH}(h) + k_{\text{dep}} + \text{CADR}/V$ is stepped across 2 passes of the 24-hour diurnal cycle with selective sealing and a modeled afternoon ventilation option ($P$: penetration, $\text{ACH}$: air changes per hour, $k_{\text{dep}}$: deposition rate enhanced by wet mopping, $\text{CADR}$: clean air delivery rate from HEPA / Corsi-Rosenthal box, and $V \in [12, 500]\,\text{m}^3$ clamped room volume).
-   - **Selective Sealing & Ventilation:** With `window_sealing`, each modeled hour uses the lower of the sealed and baseline indoor estimates to account for cooking particles trapped indoors. During the afternoon check, the model considers higher airflow only when outdoor PM2.5 is below indoor PM2.5 and at or below 120 ug/m3. The `ventilation_window` intervention, banner, and routine use that decision.
+   - **Selective Sealing & Ventilation:** The sealing schedule maintains baseline air exchange during cooking and its modeled recovery period. An eligible afternoon hour models 30 minutes of higher airflow followed by 30 minutes of ordinary exchange. The model flags hours only when outdoor PM2.5 is lower than indoors and at or below 120 ug/m3.
    - **Daily Inhaled Dose:** Integrates hourly outdoor/indoor concentration $\times$ activity-specific inhalation rate (sleep, resting, commute), scaled for vulnerable members and N95 filtration efficiency.
    - **Emissions, Budget Ranking & RWA Multiplier:** Computes $\text{CO}_2\text{e}$ (g/day), $\text{PM}_{2.5}$ (mg/day), and net monthly ₹ savings across commute and cooking choices, sorts IAQ interventions so ₹0–₹500 hacks surface first, and scales community impact linearly across participating RWA households.
 
@@ -29,7 +29,7 @@ SmogWise Virtual uses a **Two-Tier Hybrid Architecture** so every number is audi
 
 - **Pan-India Geocoding (`GET /api/locations/search?q=<query>`):** Uses Open-Meteo Geocoding with `countryCode=IN` and checks the returned country code and coordinate bounds (`lat` $\in [6.5, 37.5]$, `lon` $\in [68.0, 97.5]$). Successful responses, including empty results, are cached for 24 hours. Searches with no usable remote matches return matching curated Indian presets. Failed and malformed responses are retried on the next search.
 - **Browser Geolocation & `0.05°` Coordinate Grid (`GET /api/aqi?lat=<lat>&lon=<lon>`):** Quantizes coordinates to a `0.05°` (~5.5 km) SHA-256 LRU cache key so nearby requests share cached live readings. Each caller's exact location determines its distance to the nearest fallback station.
-- **50 km Nearest-Station Fallback:** If Open-Meteo Air Quality fails or times out (3.5s), custom coordinates within **50 km** of a preset station receive that preset and its name. Beyond **50 km**, the API returns `503 LIVE_AQ_UNAVAILABLE`. The workspace keeps the selected location and identifies the curated preset used by its local plan as the nearest station proxy.
+- **50 km Nearest-Station Fallback:** If Open-Meteo Air Quality fails or times out (3.5s), custom coordinates within **50 km** of a preset station receive that preset and its name. Beyond **50 km**, the API returns `503 LIVE_AQ_UNAVAILABLE`. The cutoff uses the unrounded distance. The workspace keeps the location selected, shows the outage and nearest station, and withholds local exposure, routines, what-if results, and briefings until a representative snapshot is available.
 
 ---
 
@@ -62,7 +62,7 @@ SmogWise Virtual uses a **Two-Tier Hybrid Architecture** so every number is audi
 | **Tier 1: Deterministic Engine** | Diurnal inversion profile, indoor mass balance, inhaled dose, CPCB NAQI sub-indices, emissions, budget ranking, RWA scaling | Pure TypeScript in `src/domain/`; zero network/DOM calls; sub-millisecond client & server execution; emits `[CALC:*]`, `[SCI:*]`, and `[AQ:*]` ground-truth tokens |
 | **Edge & Location Guard** | Query validation, India bounding box (`6.5–37.5°N, 68.0–97.5°E`), SSRF allowlisting, `0.05°` cache quantization, rate limiting | `server/middleware/locationGuard.ts` & `server/services/openMeteoClient.ts` reject array parameters (`?q[]=`), URLs, and out-of-bounds coordinates with HTTP `400` |
 | **Prompt Flow & Isolation** | Bilingual advisory, what-if narrative, and grounded Q&A (`POST /api/plan`, `/api/what-if`, `/api/ai/ask`) | User text is NFKC-normalized, stripped of spoofed `[CALC:*]`/`[AQ:*]`/`[SCI:*]` tags, XML-escaped inside `<user_query>`, and LLM responses are filtered to verified `allowedKeys` |
-| **Tier 2: Grounded GenAI** | Natural-language synthesis grounded strictly in Tier 1 citation tokens (`gemini-3.5-flash-lite` -> `gemini-4-hydrogen`) | Server-only `@google/genai` client with Zod validation for structured briefing JSON, output leak scanning, and deterministic bilingual fallback |
+| **Tier 2: Grounded GenAI** | Selection of server-rendered Tier 1 facts and locally executed tool results (`gemini-3.5-flash-lite` -> `gemini-4-hydrogen`) | Server-only `@google/genai` client with Zod validation for structured briefing JSON, output leak scanning, and deterministic bilingual fallback |
 
 ---
 
@@ -72,9 +72,9 @@ SmogWise Virtual uses a **Two-Tier Hybrid Architecture** so every number is audi
 - **API Endpoints:**
   - `GET /api/health` — liveness and status.
   - `GET /api/locations/search?q=<query>` — Pan-India city/town search with strict query and SSRF guards.
-  - `GET /api/aqi?city=<id>` or `GET /api/aqi?lat=<lat>&lon=<lon>` — SSRF-safe Open-Meteo AQ fetch (3.5s `AbortController` timeout, `0.05°` quantized coordinate fetch + SHA-256 LRU cache), CPCB sub-index calculation across available pollutants (`PM2.5`, `PM10`, `NO2`), a live observation timestamp when supplied, and a 50 km preset fallback.
+  - `GET /api/aqi?city=<id>` or `GET /api/aqi?lat=<lat>&lon=<lon>` — SSRF-safe Open-Meteo AQ fetch (3.5s `AbortController` timeout, `0.05°` quantized coordinate fetch + SHA-256 LRU cache), CPCB sub-index calculation across available pollutants (`PM2.5`, `PM10`, `NO2`), a live observation timestamp when supplied, an observation ID, an AQ status, and a 50 km preset fallback.
   - `POST /api/plan` — full localized (`en`/`hi`) daily routine, ranked IAQ hacks, citations, and copyable RWA notice (strict `UserProfile` or `{ profile, useLiveAq? }` validation).
-  - `POST /api/plan/briefing` — `AiPlanBriefingCard` requests a grounded headline, summary, and household actions from `gemini-3.5-flash-lite`, with a budgeted `gemini-4-hydrogen` fallback, bounded LRU caching, and deterministic bilingual guidance. The community plan calculates RWA totals.
+  - `POST /api/plan/briefing` — `AiPlanBriefingCard` requests server-rendered claims and household action selections from `gemini-3.5-flash-lite`, with a budgeted `gemini-4-hydrogen` fallback, bounded LRU caching, and deterministic bilingual guidance. The community plan calculates RWA totals.
   - `POST /api/what-if` — side-by-side comparison of two household choices with quantitative deltas and location-specific AQ sources.
   - `POST /api/ai/ask` — grounded bilingual Q&A with prompt-injection sanitization, XML delimiters, and output leak checks.
 - **Security & Accessibility:** Helmet CSP (including `font-src 'self' data:`)/`nosniff`/`X-Frame-Options`, `Permissions-Policy: geolocation=(self)`, `Referrer-Policy: no-referrer`, COOP/CORP headers, strict CORS + CSRF Origin/`Sec-Fetch-Site` mutation guard, `bodyGuard` own-property prototype-pollution and nesting depth-8 guard, 16 KB JSON body limit, `Cache-Control` `public, s-maxage=300, stale-while-revalidate=600` vs `private, no-store` split, bounded singleflight deduplication, isolated route-group rate limiting (with Vercel serverless per-instance ephemeral cold-start caveat), sanitized Zod validation (no stack traces), production dependency audits, `>=92%` stmts/funcs/lines and `>=85%` branches coverage gates, `ErrorBoundary`, `sr-only` `ImpactDashboard` chart table, WCAG 2.1 AA contrast, semantic landmarks, skip link, `aria-live` alerts, keyboard navigation, and non-color-only CPCB AQI labels.
@@ -103,15 +103,15 @@ SmogWise Virtual protects the personalized household & RWA workspace behind a se
 | **Office Commuter** (`office_commuter`) | `commuter.eval@smogwise.in` | `SmogWise#Eval2026` | Delhi Commuter · English (`en`) |
 | **Outdoor Student** (`outdoor_student`) | `student.eval@smogwise.in` | `SmogWise#Eval2026` | Kanpur Student · English (`en`) |
 
-- **Cryptographic Password & Session Security:** Passwords are verified non-blockingly on login routes using salted async `crypto.scrypt` and constant-time `crypto.timingSafeEqual`. Successful authentication issues a 24-hour `HMAC-SHA256` signed `HttpOnly`, `SameSite=Lax` (`Secure` in production) session cookie carrying a unique `jti` token ID signed with `AUTH_SECRET` (from environment or a per-process CSPRNG fallback when unset).
+- **Cryptographic Password & Session Security:** Passwords are verified non-blockingly on login routes using salted async `crypto.scrypt` and constant-time `crypto.timingSafeEqual`. Successful authentication issues a 24-hour `HMAC-SHA256` signed `HttpOnly`, `SameSite=Lax` (`Secure` in production) session cookie carrying a unique `jti` token ID signed with `AUTH_SECRET`. Production sign-in and preferences require a stable secret of at least 32 characters. Development can use a per-process CSPRNG key.
 - **Dedicated Brute-Force Protection & Zero Bypasses:** Login uses `authLimiter` (20 requests per 15 minutes per IP). Logout, session lookup, and preferences share `sessionLimiter` (120 requests per 15 minutes per IP). The workspace requires a server-verified session.
 - **Auth & Preference Endpoints:**
   - `POST /api/auth/login` — verifies email/password via async `crypto.scrypt` + `timingSafeEqual` and sets the `HttpOnly` session cookie.
   - `POST /api/auth/logout` — revokes active session `jti` in memory and clears the session cookie (`Max-Age=0`).
   - `GET /api/auth/session` — validates the `HMAC-SHA256` session cookie and returns `{ authenticated: true, user }` when signed in, or `{ authenticated: false, user: null }` otherwise.
-  - `GET /api/user/preferences` & `PUT /api/user/preferences` — reads and persists per-user profile settings scoped strictly to the authenticated user ID.
+  - `GET /api/user/preferences` & `PUT /api/user/preferences` — reads and writes session-scoped demo preferences. GET returns a strong revision ETag. PUT accepts that ETag in `If-Match` and returns 409 on a stale revision.
 
-- **Single-instance deployment:** Caches, rate limits, session revocations, and preferences live in the server process. On Vercel they may differ between instances and reset on cold starts.
+- **Single-instance deployment:** Signed preference cookies carry a session-scoped revision between instances. In-memory preferences, comparison-and-set checks, rate limits, and logout revocations are instance-local. Concurrent writes on different instances can diverge, and copied tokens can remain valid on other instances until expiry. Within an instance, a stale validator receives a conflict and the workspace offers an explicit reload. Failed pre-sign-out saves leave the session open.
 
 ---
 
@@ -121,7 +121,7 @@ SmogWise Virtual protects the personalized household & RWA workspace behind a se
 npm install
 cp .env.example .env
 # Optional: set GEMINI_API_KEY= in .env for live Tier 2 Gemini responses
-# Optional: set AUTH_SECRET= in .env to persist HMAC-SHA256 session cookies across server restarts
+# Set AUTH_SECRET in production to a stable high-entropy value of at least 32 characters
 # Optional: set TRUST_PROXY=1 in .env only when deployed behind a trusted reverse proxy
 ```
 

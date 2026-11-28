@@ -18,6 +18,7 @@ import { formatAfternoonVentilation, getAfternoonVentilation } from './ventilati
 export { generateDailyRoutine } from './routineBuilder.js';
 
 function getVentilationAdvice(report: DeterministicReport, language: LanguageCode): string {
+  if (report.aqStatus === 'unavailable' || report.aqStatus === 'pending') return '';
   return formatAfternoonVentilation(
     getAfternoonVentilation(report).canVentilate,
     report.exposure.optimalVentilationWindow,
@@ -32,6 +33,36 @@ function getBandLabel(bandId: AqiBandId, language: LanguageCode): string {
   return language === 'hi' ? entry.hi : entry.en;
 }
 
+function formatHouseholdEmissionsSummary(
+  co2eAvoidedGramsPerDay: number,
+  monthlyNetSavingsInr: number,
+  language: LanguageCode,
+): string {
+  if (language === 'hi') {
+    const co2ePart = co2eAvoidedGramsPerDay >= 0
+      ? `प्रतिदिन ${String(co2eAvoidedGramsPerDay)}g CO2e बचत`
+      : `बेसलाइन से +${String(Math.abs(co2eAvoidedGramsPerDay))}g CO2e/दिन अधिक उत्सर्जन`;
+    const inrPart = monthlyNetSavingsInr >= 0
+      ? `मासिक ₹${String(monthlyNetSavingsInr)} बचत होती है।`
+      : `मासिक ₹${String(Math.abs(monthlyNetSavingsInr))} अतिरिक्त खर्च है।`;
+    return `${co2ePart} और ${inrPart}`;
+  }
+  const co2ePart = co2eAvoidedGramsPerDay >= 0
+    ? `You avoid ${String(co2eAvoidedGramsPerDay)}g CO2e/day`
+    : `Current fuel/travel emits +${String(Math.abs(co2eAvoidedGramsPerDay))}g CO2e/day above baseline`;
+  const inrPart = monthlyNetSavingsInr >= 0
+    ? `with INR ${String(monthlyNetSavingsInr)}/month net savings.`
+    : `with +INR ${String(Math.abs(monthlyNetSavingsInr))}/month net spend.`;
+  return `${co2ePart} ${inrPart}`;
+}
+
+function joinUnavailableSummary(language: LanguageCode, emissions: string): string {
+  const status = language === 'hi'
+    ? 'स्थानीय वायु गुणवत्ता उपलब्ध नहीं है।'
+    : 'Representative local air quality is unavailable.';
+  return `${status} ${emissions}`;
+}
+
 /**
  * Formats a plain-language localized summary explaining direct household impact.
  */
@@ -41,6 +72,15 @@ export function formatLocalizedSummary(
 ): string {
   const { city, exposure, emissions, cpcbAqi, aqiBand, dominantPollutant } = report;
   const aqiLabel = getBandLabel(aqiBand, language);
+  const emissionsSentence = formatHouseholdEmissionsSummary(
+    emissions.co2eAvoidedGramsPerDay,
+    emissions.monthlyNetSavingsInr,
+    language,
+  );
+
+  if (report.aqStatus === 'unavailable' || report.aqStatus === 'pending') {
+    return joinUnavailableSummary(language, emissionsSentence);
+  }
 
   if (language === 'hi') {
     return (
@@ -49,9 +89,7 @@ export function formatLocalizedSummary(
       `आपके चुने उपायों से दैनिक PM2.5 खुराक ${String(exposure.baselineInhaledUgPerDay)} से घटकर ` +
       `${String(exposure.optimizedInhaledUgPerDay)} ug/दिन (${String(exposure.doseReductionPercent)}% कमी) ` +
       `होती है और इनडोर PM2.5 ${String(exposure.optimizedIndoorPm25)} ug/m3 रहता है। ` +
-      `${getVentilationAdvice(report, language)} ` +
-      `प्रतिदिन ${String(emissions.co2eAvoidedGramsPerDay)}g CO2e और ` +
-      `मासिक ₹${String(emissions.monthlyNetSavingsInr)} की बचत होती है।`
+      `${getVentilationAdvice(report, language)} ${emissionsSentence}`
     );
   }
 
@@ -61,9 +99,7 @@ export function formatLocalizedSummary(
     `Your selected actions cut daily inhaled PM2.5 from ${String(exposure.baselineInhaledUgPerDay)} ` +
     `to ${String(exposure.optimizedInhaledUgPerDay)} ug/day (${String(exposure.doseReductionPercent)}% drop) ` +
     `and lower indoor PM2.5 to ${String(exposure.optimizedIndoorPm25)} ug/m3. ` +
-    `${getVentilationAdvice(report, language)} ` +
-    `You avoid ${String(emissions.co2eAvoidedGramsPerDay)}g CO2e/day with ` +
-    `INR ${String(emissions.monthlyNetSavingsInr)}/month net savings.`
+    `${getVentilationAdvice(report, language)} ${emissionsSentence}`
   );
 }
 
@@ -107,6 +143,28 @@ function buildZeroSavingsRwaNotice(
   );
 }
 
+function formatMonthlyChange(value: number, unit: string, hi: boolean): string {
+  const amount = `${Math.abs(value)} ${unit}`;
+  if (value === 0) return hi ? `${amount} बदलाव` : `${amount} change`;
+  if (hi) return value > 0 ? `${amount} कम` : `${amount} अधिक`;
+  return value > 0 ? `+${amount} avoided` : `+${amount} added`;
+}
+
+function buildMixedEmissionsRwaNotice(
+  report: DeterministicReport,
+  language: LanguageCode,
+  households: number,
+  adoptionPct: number,
+): string {
+  const hi = language === 'hi';
+  const em = report.emissions;
+  const co2 = formatMonthlyChange(em.communityCo2eAvoidedKgPerMonth, 'kg CO2e', hi);
+  const pm = formatMonthlyChange(em.communityPm25AvoidedGramsPerMonth, 'g PM2.5', hi);
+  return hi
+    ? `RWA सामुदायिक सूचना (${report.city.nameHi}): ${households} फ्लैट्स (${adoptionPct}% भागीदारी) में पेट्रोल/एलपीजी की तुलना में हर माह ${co2} और ${pm}।`
+    : `RWA Community Notice (${report.city.name}): Across ${households} flats (${adoptionPct}% adoption), the monthly change from the petrol/LPG baseline is ${co2} and ${pm}.`;
+}
+
 /**
  * Builds a shareable WhatsApp/notice-board RWA community advisory.
  */
@@ -121,7 +179,10 @@ export function buildRwaNotice(
   if (households <= 0 || adoptionPct <= 0) {
     return buildUnconfiguredRwaNotice(report, profile.language);
   }
-  if (communityCo2eAvoidedKgPerMonth <= 0) {
+  if (communityCo2eAvoidedKgPerMonth < 0 || communityPm25AvoidedGramsPerMonth < 0) {
+    return buildMixedEmissionsRwaNotice(report, profile.language, households, adoptionPct);
+  }
+  if (communityCo2eAvoidedKgPerMonth === 0 && communityPm25AvoidedGramsPerMonth === 0) {
     return buildZeroSavingsRwaNotice(report, profile.language, households, adoptionPct);
   }
 

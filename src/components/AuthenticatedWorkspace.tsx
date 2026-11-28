@@ -2,15 +2,12 @@
  * Authenticated main workspace view with race-safe preference synchronization and ErrorBoundary.
  */
 
-import React, { useEffect, useRef, useState } from 'react';
-import type { UserProfile } from '../domain/types.js';
+import React from 'react';
+import { sumActiveHacksCostInr } from '../domain/emissionsEngine.js';
 import { getAfternoonVentilation } from '../domain/ventilation.js';
+import { usePreferenceSync } from '../hooks/usePreferenceSync.js';
 import { useSmogPlan, type UseSmogPlanResult } from '../hooks/useSmogPlan.js';
-import {
-  fetchUserPreferences,
-  saveUserPreferences,
-  type AuthUser,
-} from '../services/apiClient.js';
+import type { AuthUser } from '../services/apiClient.js';
 import { AiPlanBriefingCard } from './AiPlanBriefingCard.js';
 import { AppFooter } from './AppFooter.js';
 import { DailyRoutineTimeline } from './DailyRoutineTimeline.js';
@@ -22,6 +19,7 @@ import { PersonaForm } from './PersonaForm.js';
 import { RWACommunityPanel } from './RWACommunityPanel.js';
 import { SmogAlertBanner, type SmogAlertBannerProps } from './SmogAlertBanner.js';
 import { WhatIfComparator } from './WhatIfComparator.js';
+import { WorkspaceAlerts } from './WorkspaceAlerts.js';
 
 function buildBannerProps(state: UseSmogPlanResult): SmogAlertBannerProps {
   const { profile, plan, aqiError } = state;
@@ -35,38 +33,51 @@ function buildBannerProps(state: UseSmogPlanResult): SmogAlertBannerProps {
   };
 }
 
-function AppMainResults({ state }: { readonly state: UseSmogPlanResult }): React.ReactElement {
-  const { report, routine, rwaNotice, citations } = state.plan;
+function LocalResults({ state }: { readonly state: UseSmogPlanResult }): React.ReactElement {
+  const { profile, plan, householdReport, liveAq, briefing, isBriefingLoading, briefingFailed } =
+    state;
+  const { language } = profile;
+  const { report, routine, citations } = plan;
   const indoorTargetCitation = citations['CALC:INDOOR_TARGET'];
   const plantsVsHepaCitation = citations['SCI:PLANTS_VS_HEPA'];
+  const overBudget = sumActiveHacksCostInr(profile.activeHacks) > profile.monthlyBudgetInr;
 
   return (
-    <div className="space-y-5 lg:col-span-8">
-      <ImpactDashboard report={report} language={state.profile.language} />
+    <>
+      <ImpactDashboard report={report} language={language} />
       <AiPlanBriefingCard
-        report={report}
-        briefing={state.briefing}
-        isLoading={state.isBriefingLoading}
-        language={state.profile.language}
+        report={report} briefing={briefing} isLoading={isBriefingLoading}
+        language={language} hasOverBudgetSelection={overBudget} briefingFailed={briefingFailed}
       />
       <DailyRoutineTimeline
-        routine={routine}
-        optimalVentilationWindow={report.exposure.optimalVentilationWindow}
-        language={state.profile.language}
+        routine={routine} optimalVentilationWindow={report.exposure.optimalVentilationWindow}
+        language={language}
         {...(indoorTargetCitation !== undefined ? { indoorTargetCitation } : {})}
         {...(plantsVsHepaCitation !== undefined ? { plantsVsHepaCitation } : {})}
       />
-      <WhatIfComparator profile={state.profile} liveAq={state.liveAq} />
+      <WhatIfComparator profile={profile} liveAq={liveAq} report={householdReport} />
+    </>
+  );
+}
+
+function AppMainResults({ state }: { readonly state: UseSmogPlanResult }): React.ReactElement {
+  const { profile, plan, updateRwaHouseholds, updateRwaAdoptionRate } = state;
+  const { report, rwaNotice } = plan;
+  const hasLocalAq = report.aqStatus !== 'unavailable' && report.aqStatus !== 'pending';
+  return (
+    <div className="space-y-5 lg:col-span-8">
+      {hasLocalAq && <LocalResults state={state} />}
       <RWACommunityPanel
-        households={state.profile.rwaHouseholds ?? 120}
-        adoptionRate={state.profile.rwaAdoptionRate ?? 0.45}
-        emissions={report.emissions}
-        rwaNotice={rwaNotice}
-        language={state.profile.language}
-        onHouseholdsChange={state.updateRwaHouseholds}
-        onAdoptionChange={state.updateRwaAdoptionRate}
+        households={profile.rwaHouseholds ?? 120} adoptionRate={profile.rwaAdoptionRate ?? 0.45}
+        emissions={report.emissions} rwaNotice={rwaNotice} language={profile.language}
+        onHouseholdsChange={updateRwaHouseholds} onAdoptionChange={updateRwaAdoptionRate}
       />
-      <GroundedAssistant profile={state.profile} />
+      <GroundedAssistant
+        profile={profile}
+        observationId={report.observationId}
+        snapshotToken={state.snapshotToken}
+        onSyncReport={state.syncExternalReport}
+      />
     </div>
   );
 }
@@ -77,6 +88,7 @@ function AppMainColumns({ state }: { readonly state: UseSmogPlanResult }): React
       <div className="lg:col-span-4">
         <PersonaForm
           profile={state.profile}
+          presetSelectionRevision={state.presetSelectionRevision}
           iaqHacks={state.plan.iaqHacks}
           onUpdate={state.updateProfile}
           onToggleHack={state.toggleHack}
@@ -90,141 +102,68 @@ function AppMainColumns({ state }: { readonly state: UseSmogPlanResult }): React
   );
 }
 
-function useHydratePreferences(
-  profile: UserProfile,
-  applySampleScenario: (scenarioProfile: UserProfile) => void,
-  lastSyncedJsonRef: React.MutableRefObject<string | null>,
-): boolean {
-  const [hasHydrated, setHasHydrated] = useState<boolean>(false);
-  const initialJsonRef = useRef<string>(JSON.stringify(profile));
-  const profileRef = useRef<UserProfile>(profile);
-  const editedBeforeHydrationRef = useRef<boolean>(false);
-
-  useEffect(() => {
-    profileRef.current = profile;
-    if (!hasHydrated && JSON.stringify(profile) !== initialJsonRef.current) {
-      editedBeforeHydrationRef.current = true;
-    }
-  }, [hasHydrated, profile]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        const res = await fetchUserPreferences(controller.signal);
-        if (controller.signal.aborted) return;
-        if (res.profile !== null && !editedBeforeHydrationRef.current) {
-          lastSyncedJsonRef.current = JSON.stringify(res.profile);
-          applySampleScenario(res.profile);
-        } else {
-          lastSyncedJsonRef.current = editedBeforeHydrationRef.current
-            ? null
-            : JSON.stringify(profileRef.current);
-        }
-      } catch (err: unknown) {
-        void err;
-        lastSyncedJsonRef.current ??= JSON.stringify(profileRef.current);
-      } finally {
-        if (!controller.signal.aborted) {
-          setHasHydrated(true);
-        }
-      }
-    })();
-    return () => controller.abort();
-  }, [applySampleScenario, lastSyncedJsonRef]);
-
-  return hasHydrated;
-}
-
-function usePreferenceSync(
-  profile: UserProfile,
-  applySampleScenario: (scenarioProfile: UserProfile) => void,
-): void {
-  const lastSyncedJsonRef = useRef<string | null>(null);
-  const hasHydrated = useHydratePreferences(profile, applySampleScenario, lastSyncedJsonRef);
-
-  useEffect(() => {
-    const serialized = JSON.stringify(profile);
-    if (!hasHydrated || serialized === lastSyncedJsonRef.current) {
-      return undefined;
-    }
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      void saveUserPreferences(profile, controller.signal)
-        .then(() => {
-          if (!controller.signal.aborted) {
-            lastSyncedJsonRef.current = serialized;
-          }
-        })
-        .catch((err: unknown) => {
-          // Best-effort preference persistence; next profile edit retries automatically.
-          void err;
-        });
-    }, 1000);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [hasHydrated, profile]);
-}
-
 /** Props for the AuthenticatedWorkspace component. */
 export interface AuthenticatedWorkspaceProps {
   readonly authUser: AuthUser;
   readonly onSignOut: () => void;
-  readonly signOutFailed?: boolean;
+  readonly signOutFailed?: 'save' | 'logout';
+  readonly isSigningOut?: boolean;
+  readonly onRegisterPrefsFlush?: (flush: () => Promise<void> | undefined) => void;
 }
 
-/** Renders the authenticated SmogWise Virtual workspace with synced preferences. */
-export const AuthenticatedWorkspace: React.FC<AuthenticatedWorkspaceProps> = function Workspace({
+function AuthenticatedWorkspaceContent({
   authUser,
   onSignOut,
   signOutFailed,
-}) {
+  isSigningOut = false,
+  onRegisterPrefsFlush,
+}: AuthenticatedWorkspaceProps): React.ReactElement {
   const state = useSmogPlan({
-    persona: authUser.personaId,
-    language: authUser.defaultLang,
-    cityId: authUser.defaultCityId,
+    persona: authUser.personaId, language: authUser.defaultLang, cityId: authUser.defaultCityId,
   });
-  const { profile, plan, isSyncing, setLanguage, selectPresetCity, applySampleScenario } =
-    state;
-  const { report } = plan;
-
-  usePreferenceSync(profile, applySampleScenario);
+  const { profile, plan, isSyncing, setLanguage, selectPresetCity, applySampleScenario } = state;
+  const hasLocalAq = plan.report.aqStatus !== 'unavailable' && plan.report.aqStatus !== 'pending';
+  const { error, recover } = usePreferenceSync(profile, applySampleScenario, onRegisterPrefsFlush);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <Header
-        city={report.city}
-        language={profile.language}
-        dataSource={report.dataSource}
-        isSyncing={isSyncing}
-        onCityChange={selectPresetCity}
-        onLanguageChange={setLanguage}
-        isAuthenticated={true}
-        authUser={authUser}
-        onSignOut={onSignOut}
+        city={plan.report.city} language={profile.language} dataSource={plan.report.dataSource}
+        isSyncing={isSyncing} aqUnavailable={plan.report.aqStatus === 'unavailable'}
+        hasLocalSections={hasLocalAq} isSigningOut={isSigningOut}
+        onCityChange={selectPresetCity} onLanguageChange={setLanguage}
+        isAuthenticated={true} authUser={authUser} onSignOut={onSignOut}
       />
-
       <main
         id="main-content"
         tabIndex={-1}
         className="mx-auto max-w-7xl space-y-4 px-4 py-5 focus:outline-none"
       >
-        {signOutFailed && (
-          <p role="alert" className="rounded border border-red-800 bg-red-50 p-2 text-sm text-red-900">
-            {profile.language === 'hi'
-              ? 'लॉग आउट नहीं हो सका। फिर से प्रयास करें।'
-              : 'Could not sign out. Please try again.'}
-          </p>
-        )}
-        <ErrorBoundary language={profile.language} resetKey={authUser.id}>
-          <SmogAlertBanner {...buildBannerProps(state)} />
+        <WorkspaceAlerts
+          language={profile.language}
+          {...(signOutFailed !== undefined ? { signOutFailed } : {})}
+          preferenceError={error}
+          recoverPreferences={recover}
+          isSigningOut={isSigningOut}
+        />
+        <SmogAlertBanner {...buildBannerProps(state)} />
+        <div inert={isSigningOut}>
           <AppMainColumns state={state} />
-        </ErrorBoundary>
+        </div>
       </main>
-
       <AppFooter language={profile.language} />
     </div>
+  );
+}
+
+/** Renders the authenticated SmogWise Virtual workspace with synced preferences. */
+export const AuthenticatedWorkspace: React.FC<AuthenticatedWorkspaceProps> = function Workspace(
+  props,
+) {
+  const { authUser } = props;
+  return (
+    <ErrorBoundary language={authUser.defaultLang} resetKey={authUser.id}>
+      <AuthenticatedWorkspaceContent {...props} />
+    </ErrorBoundary>
   );
 };

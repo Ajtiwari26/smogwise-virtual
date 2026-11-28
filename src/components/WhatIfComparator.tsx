@@ -3,9 +3,15 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { compareWhatIf } from '../domain/impactService.js';
+import { useHouseholdProfile } from '../hooks/useSmogPlanHelpers.js';
+import {
+  compareWhatIf,
+  compareWhatIfFromBaseline,
+  extractReportLiveAq,
+} from '../domain/impactService.js';
 import type {
   CommuteMode,
+  DeterministicReport,
   CookingFuel,
   LiveAqOverride,
   UserProfile,
@@ -21,6 +27,7 @@ import {
 /** Props for the interactive WhatIfComparator component. */
 export interface WhatIfComparatorProps {
   readonly profile: UserProfile;
+  readonly report?: DeterministicReport;
   readonly liveAq: LiveAqOverride | undefined;
 }
 
@@ -129,7 +136,9 @@ function resolveAlternative<T>(
   return pickDefault(currentBase);
 }
 
-function useWhatIfState(profile: UserProfile, liveAq?: LiveAqOverride) {
+function useWhatIfState(
+  profile: UserProfile, liveAq?: LiveAqOverride, report?: DeterministicReport,
+) {
   const [commuteOverride, setCommuteOverride] = useState<{
     readonly base: CommuteMode;
     readonly alt: CommuteMode;
@@ -146,19 +155,27 @@ function useWhatIfState(profile: UserProfile, liveAq?: LiveAqOverride) {
     pickDefaultAltCommute,
   );
   const altFuel = resolveAlternative(fuelOverride, profile.cookingFuel, pickDefaultAltFuel);
+  const householdBase = useHouseholdProfile(profile);
 
   const comparison = useMemo(() => {
     const nextHacks = addCorsiBox
-      ? Array.from(new Set([...profile.activeHacks, 'corsi_rosenthal_box' as const]))
-      : profile.activeHacks;
+      ? Array.from(new Set([...householdBase.activeHacks, 'corsi_rosenthal_box' as const]))
+      : householdBase.activeHacks;
     const alternative: UserProfile = {
-      ...profile,
+      ...householdBase,
       commuteMode: altCommute,
       cookingFuel: altFuel,
       activeHacks: nextHacks,
     };
-    return compareWhatIf(profile, alternative, liveAq);
-  }, [profile, liveAq, altCommute, altFuel, addCorsiBox]);
+    return report === undefined
+      ? compareWhatIf(householdBase, alternative, liveAq)
+      : compareWhatIfFromBaseline(
+        householdBase,
+        report,
+        alternative,
+        extractReportLiveAq(report),
+      );
+  }, [householdBase, liveAq, report, altCommute, altFuel, addCorsiBox]);
 
   return {
     altCommute,
@@ -175,9 +192,9 @@ function useWhatIfState(profile: UserProfile, liveAq?: LiveAqOverride) {
 
 /** Side-by-side 2-choice scenario comparator computing instant Tier 1 deltas. */
 export const WhatIfComparator: React.FC<WhatIfComparatorProps> = React.memo(
-  function WhatIfComparator({ profile, liveAq }) {
+  function WhatIfComparator({ profile, liveAq, report }) {
     const isHi = profile.language === 'hi';
-    const state = useWhatIfState(profile, liveAq);
+    const state = useWhatIfState(profile, liveAq, report);
 
     return (
       <section

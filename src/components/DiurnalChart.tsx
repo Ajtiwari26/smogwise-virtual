@@ -34,21 +34,29 @@ function buildPolylinePoints(
     .join(' ');
 }
 
+function buildDiurnalSummaryStats(series: readonly HourlyExposurePoint[], isHi: boolean) {
+  const keyRows = [7, 14, 20, 1]
+    .map((hr) => series.find((pt) => pt.hour === hr))
+    .filter((pt): pt is HourlyExposurePoint => pt !== undefined);
+  const rows = keyRows.length > 0 ? keyRows : series.slice(0, 4);
+  const count = Math.max(1, series.length);
+  const avgOutdoor = Math.round(
+    series.reduce((sum, pt) => sum + sanitizeFinite(pt.outdoorPm25), 0) / count,
+  );
+  const avgIndoor = Math.round(
+    series.reduce((sum, pt) => sum + sanitizeFinite(pt.optimizedIndoorPm25), 0) / count,
+  );
+  const eligible = series.filter((pt) => pt.isOptimalVentilation).map((pt) => pt.label);
+  const ventSummary = eligible.length > 0
+    ? eligible.join(', ')
+    : (isHi ? 'कोई उपयुक्त घंटा नहीं (खिड़कियाँ बंद रखें)' : 'None (keep windows closed)');
+  return { rows, avgOutdoor, avgIndoor, ventSummary };
+}
+
 const DiurnalSummaryTable: React.FC<DiurnalChartProps & { readonly tableId: string }> = React.memo(
   function DiurnalSummaryTable({ series, language, tableId }) {
     const isHi = language === 'hi';
-    const targetHours = [7, 14, 20, 1];
-    const keyRows = targetHours
-      .map((hr) => series.find((pt) => pt.hour === hr))
-      .filter((pt): pt is HourlyExposurePoint => pt !== undefined);
-    const rows = keyRows.length > 0 ? keyRows : series.slice(0, 4);
-    const count = Math.max(1, series.length);
-    const avgOutdoor = Math.round(
-      series.reduce((sum, pt) => sum + sanitizeFinite(pt.outdoorPm25), 0) / count,
-    );
-    const avgIndoor = Math.round(
-      series.reduce((sum, pt) => sum + sanitizeFinite(pt.optimizedIndoorPm25), 0) / count,
-    );
+    const { rows, avgOutdoor, avgIndoor, ventSummary } = buildDiurnalSummaryStats(series, isHi);
 
     return (
       <table id={tableId} className="sr-only">
@@ -77,11 +85,42 @@ const DiurnalSummaryTable: React.FC<DiurnalChartProps & { readonly tableId: stri
             <td>{avgOutdoor}</td>
             <td>{avgIndoor}</td>
           </tr>
+          <tr>
+            <th scope="row">{isHi ? 'वेंटिलेशन उपयुक्त घंटे' : 'Ventilation Eligible Hours'}</th>
+            <td colSpan={2}>{ventSummary}</td>
+          </tr>
         </tbody>
       </table>
     );
   },
 );
+
+const VentilationWindowBars: React.FC<{
+  readonly series: readonly HourlyExposurePoint[];
+  readonly width: number;
+  readonly height: number;
+  readonly pad: number;
+}> = React.memo(function VentilationWindowBars({ series, width, height, pad }) {
+  return (
+    <>
+      {series.map((pt, idx) => {
+        if (!pt.isOptimalVentilation) return null;
+        const x = pad + (idx / Math.max(1, series.length - 1)) * (width - pad * 2);
+        return (
+          <rect
+            key={pt.hour}
+            x={x - 8}
+            y={pad}
+            width={16}
+            height={height - pad * 2}
+            fill="#ccfbf1"
+            aria-hidden="true"
+          />
+        );
+      })}
+    </>
+  );
+});
 
 interface DiurnalSvgBodyProps {
   readonly series: readonly HourlyExposurePoint[];
@@ -126,25 +165,16 @@ const DiurnalSvgBody: React.FC<DiurnalSvgBodyProps> = React.memo(function Diurna
           ? 'सुबह और शाम के स्मॉग पीक और हवा बदलने के लिए उपयुक्त घंटों को दर्शाता है।'
           : 'Shows morning and evening inversion peaks and any hours suitable for ventilation.'}
       </desc>
-      {series.map((pt, idx) => {
-        if (!pt.isOptimalVentilation) {
-          return null;
-        }
-        const x = pad + (idx / Math.max(1, series.length - 1)) * (width - pad * 2);
-        return (
-          <rect
-            key={pt.hour}
-            x={x - 8}
-            y={pad}
-            width={16}
-            height={height - pad * 2}
-            fill="#ccfbf1"
-            aria-hidden="true"
-          />
-        );
-      })}
+      <VentilationWindowBars series={series} width={width} height={height} pad={pad} />
       <polyline fill="none" stroke="#9a3412" strokeWidth="2.5" points={outdoorPts} aria-hidden="true" />
-      <polyline fill="none" stroke="#0f766e" strokeWidth="2.5" points={indoorPts} aria-hidden="true" />
+      <polyline
+        fill="none"
+        stroke="#0f766e"
+        strokeWidth="2.5"
+        strokeDasharray="6 3"
+        points={indoorPts}
+        aria-hidden="true"
+      />
     </svg>
   );
 });
@@ -162,11 +192,11 @@ const DiurnalChartLegend: React.FC<{ readonly isHi: boolean }> = React.memo(
         </span>
         <span>
           <span className="text-orange-900">
-            <span aria-hidden="true">■</span> {isHi ? 'बाहरी' : 'Outdoor'}
+            <span aria-hidden="true">━</span> {isHi ? 'बाहरी' : 'Outdoor'}
           </span>{' '}
           ·{' '}
           <span className="text-teal-800">
-            <span aria-hidden="true">■</span> {isHi ? 'इनडोर' : 'Indoor'}
+            <span aria-hidden="true">┄</span> {isHi ? 'इनडोर' : 'Indoor'}
           </span>
         </span>
       </div>

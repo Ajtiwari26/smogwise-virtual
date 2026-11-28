@@ -3,8 +3,8 @@
  * and bounded singleflight coalescing.
  */
 
-import crypto from 'node:crypto';
-import { isPlainRecord } from '../../src/domain/domainUtils.js';
+/** Re-exports canonical request and snapshot hashing. */
+export { hashCacheKey } from './cacheKey.js';
 
 const DEFAULT_MAX_ENTRIES = 200;
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
@@ -25,94 +25,10 @@ export interface LruCacheStats {
 
 /** Bounded singleflight coalescer that deduplicates concurrent async work by key. */
 export interface Singleflight<T> {
-  run(key: string, work: () => Promise<T>): Promise<T>;
+  run(
+    key: string, work: (isCurrent: () => boolean) => Promise<T>, onSaturated?: () => T,
+  ): Promise<T>;
   clear(): void;
-}
-
-function compareStrings(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
-function serializeSpecialObject(value: object, seen: WeakSet<object>): string | undefined {
-  if (value instanceof Date) {
-    const iso = Number.isNaN(value.getTime()) ? 'InvalidDate' : value.toISOString();
-    return `{"__type":"Date","value":${JSON.stringify(iso)}}`;
-  }
-  if (value instanceof RegExp) {
-    return `{"__type":"RegExp","source":${JSON.stringify(value.source)},"flags":${JSON.stringify(value.flags)}}`;
-  }
-  if (value instanceof Set) {
-    const items = [...value].map((item) => serializeCanonical(item, seen)).sort(compareStrings);
-    return `{"__type":"Set","values":${JSON.stringify(items)}}`;
-  }
-  if (value instanceof Map) {
-    const entries: Array<readonly [string, string]> = [...value.entries()]
-      .map(([k, v]): readonly [string, string] => [
-        serializeCanonical(k, seen),
-        serializeCanonical(v, seen),
-      ])
-      .sort((a, b) => compareStrings(a[0], b[0]));
-    return `{"__type":"Map","entries":[${entries.map(([k, v]) => `[${k},${v}]`).join(',')}]}`;
-  }
-  return undefined;
-}
-
-function serializeScalar(value: unknown): string {
-  if (value === undefined) return '{"__type":"Undefined"}';
-  if (typeof value === 'bigint') {
-    return `{"__type":"BigInt","value":${JSON.stringify(value.toString())}}`;
-  }
-  if (typeof value === 'number' && !Number.isFinite(value)) {
-    return `{"__type":"NonFiniteNumber","value":${JSON.stringify(String(value))}}`;
-  }
-  if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
-    return JSON.stringify(value);
-  }
-  return JSON.stringify(String(value));
-}
-
-function serializePlainRecord(value: Record<string, unknown>, seen: WeakSet<object>): string {
-  const keys = Object.keys(value).sort(compareStrings);
-  const parts: string[] = [];
-  for (const key of keys) {
-    const item = value[key];
-    if (item !== undefined) parts.push(`${JSON.stringify(key)}:${serializeCanonical(item, seen)}`);
-  }
-  return `{${parts.join(',')}}`;
-}
-
-function serializeObject(value: object, seen: WeakSet<object>): string {
-  if (seen.has(value)) return '"[Circular]"';
-  seen.add(value);
-  try {
-    const special = serializeSpecialObject(value, seen);
-    if (special !== undefined) return special;
-    if (Array.isArray(value)) {
-      return `[${value.map((item) => serializeCanonical(item, seen)).join(',')}]`;
-    }
-    if (isPlainRecord(value)) return serializePlainRecord(value, seen);
-    return JSON.stringify(String(value));
-  } finally {
-    seen.delete(value);
-  }
-}
-
-function serializeCanonical(value: unknown, seen = new WeakSet<object>()): string {
-  if (value !== null && typeof value === 'object') {
-    return serializeObject(value, seen);
-  }
-  return serializeScalar(value);
-}
-
-/**
- * Produces a deterministic SHA-256 hex digest for any input, including undefined,
- * Dates, Sets, Maps, RegExps, BigInts, non-finite numbers, and circular structures.
- */
-export function hashCacheKey(input: unknown): string {
-  const canonical = serializeCanonical(input);
-  return typeof crypto.hash === 'function'
-    ? crypto.hash('sha256', canonical)
-    : crypto.createHash('sha256').update(canonical).digest('hex');
 }
 
 /**
@@ -146,13 +62,15 @@ export class LruCache<T> {
       this.misses += 1;
       return undefined;
     }
-    if (Date.now() > entry.expiresAt) {
+    if (Date.now() >= entry.expiresAt) {
       this.store.delete(key);
       this.misses += 1;
       return undefined;
     }
-    this.store.delete(key);
-    this.store.set(key, entry);
+    if (this.store.size > 1) {
+      this.store.delete(key);
+      this.store.set(key, entry);
+    }
     this.hits += 1;
     return entry.value;
   }
@@ -241,26 +159,23 @@ export function createSingleflight<T>(maxInFlight = DEFAULT_MAX_INFLIGHT): Singl
     ? Math.max(1, Math.floor(maxInFlight))
     : DEFAULT_MAX_INFLIGHT;
   const inFlight = new Map<string, Promise<T>>();
+  let active = 0;
   return {
-    run(key: string, work: () => Promise<T>): Promise<T> {
+    run(key, work, onSaturated): Promise<T> {
       const existing = inFlight.get(key);
-      if (existing !== undefined) {
-        return existing;
+      if (existing !== undefined) return existing;
+      if (active >= limit) {
+        return onSaturated === undefined
+          ? Promise.reject(new Error('Singleflight capacity exhausted.'))
+          : Promise.resolve().then(onSaturated);
       }
-      let workPromise: Promise<T>;
-      try {
-        workPromise = Promise.resolve(work());
-      } catch (err: unknown) {
-        return Promise.reject(err);
-      }
-      const promise = workPromise.finally(() => {
-        if (inFlight.get(key) === promise) {
-          inFlight.delete(key);
-        }
+      active += 1;
+      const isCurrent = (): boolean => inFlight.get(key) === promise;
+      const promise: Promise<T> = Promise.resolve().then(() => work(isCurrent)).finally(() => {
+        active -= 1;
+        if (isCurrent()) inFlight.delete(key);
       });
-      if (inFlight.size < limit) {
-        inFlight.set(key, promise);
-      }
+      inFlight.set(key, promise);
       return promise;
     },
     clear(): void {

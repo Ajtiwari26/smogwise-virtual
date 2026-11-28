@@ -187,25 +187,39 @@ export function makeDeduction(
   };
 }
 
-/** Extracts text output from `@google/genai` Interaction `output_text` or `outputs[].text`. */
+/** Extracts text from completed, fault-free SDK Interactions responses. */
 export function extractInteractionText(interaction: unknown): string {
-  if (!isPlainRecord(interaction)) {
-    return '';
-  }
+  if (!isPlainRecord(interaction) || interaction['status'] !== 'completed') return '';
+  const errors = interaction['errors'];
+  if (Array.isArray(errors) && errors.length > 0) return '';
+  const modelOutput = findFinalModelOutput(interaction['steps']);
   const direct = interaction['output_text'];
-  if (typeof direct === 'string' && direct.trim().length > 0) {
-    return direct.trim();
+  if (modelOutput === null) return '';
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  return extractModelContent(modelOutput?.['content']);
+}
+
+function findFinalModelOutput(
+  steps: unknown,
+): Record<string, unknown> | null | undefined {
+  if (!Array.isArray(steps)) return undefined;
+  let output: Record<string, unknown> | undefined;
+  for (const step of steps) {
+    if (!isPlainRecord(step)) continue;
+    if (step['type'] === 'function_call') return null;
+    if (step['type'] !== 'model_output') continue;
+    if (step['error'] !== undefined) return null;
+    output = step;
   }
-  const outputs = interaction['outputs'];
-  if (!Array.isArray(outputs)) {
-    return '';
-  }
-  for (const item of outputs) {
-    if (isPlainRecord(item) && typeof item['text'] === 'string' && item['text'].trim().length > 0) {
-      return item['text'].trim();
-    }
-  }
-  return '';
+  return output;
+}
+
+function extractModelContent(content: unknown): string {
+  if (!Array.isArray(content)) return '';
+  return content.flatMap((part: unknown) =>
+    isPlainRecord(part) && part['type'] === 'text' && typeof part['text'] === 'string'
+      ? [part['text']] : [],
+  ).join('').trim();
 }
 
 function isRequestListener(val: unknown): val is http.RequestListener {

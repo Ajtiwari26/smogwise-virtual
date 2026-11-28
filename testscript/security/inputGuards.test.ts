@@ -1,3 +1,4 @@
+import { stripCitationTags } from '../../server/middleware/textSanitizer.js';
 import request from 'supertest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../server/app.js';
@@ -73,14 +74,15 @@ describe('POST /api/plan prototype pollution & nesting depth guard', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects 10-level deeply nested JSON payload with HTTP 400', async () => {
+  it('rejects 10-level deeply nested JSON payload with HTTP 413', async () => {
     const deep = { a: { b: { c: { d: { e: { f: { g: { h: { i: { j: 1 } } } } } } } } } };
     const res = await request(app)
       .post('/api/plan')
       .set('Content-Type', 'application/json')
       .send(JSON.stringify(deep));
 
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(413);
+    expect(res.body).toMatchObject({ error: 'PAYLOAD_TOO_LARGE' });
   });
 });
 
@@ -218,9 +220,16 @@ describe('Unsafe city identifiers and prompt guard boundaries', () => {
     const notFound = await request(app).get('/api/unknown-endpoint');
     expect(notFound.status).toBe(404);
     expect(notFound.headers['cache-control']).toBe('private, no-store');
-    expect(notFound.body).toEqual({ error: 'Not found.' });
+    expect(notFound.body).toEqual({ error: 'NOT_FOUND', message: 'Not found.' });
 
     vi.stubEnv('TRUST_PROXY', '1');
     expect(createApp().get('trust proxy')).toBe(1);
   });
+});
+
+it('removes nested spoofed citation tags while retaining exact allowed standalone keys', () => {
+  const text = 'open [CALC:FAKE [[SCI:BAD]]] this [AQ:SOURCE]';
+  expect(stripCitationTags(text, new Set(['AQ:SOURCE'])))
+    .toBe('open   this [AQ:SOURCE]');
+  expect(stripCitationTags(`input ${'['.repeat(12_000)}[CALC:FAKE]`)).not.toContain('CALC:');
 });

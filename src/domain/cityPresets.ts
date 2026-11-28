@@ -209,24 +209,52 @@ export function resolveCityPreset(cityId: string): CityPreset {
   return CITY_PRESET_MAP.get(targetId) ?? DEFAULT_CITY_PRESET;
 }
 
+/** Maximum fallback distance (km) from a custom point to any curated station preset. */
+export const MAX_FALLBACK_DISTANCE_KM = 50;
+
+const EARTH_RADIUS_KM = 6371;
+
+function toRadians(deg: number): number {
+  return (deg * Math.PI) / 180;
+}
+
+/** Computes Haversine great-circle distance in kilometers between two coordinates. */
+export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const rawA =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
+  const clampedA = Math.min(1, Math.max(0, rawA));
+  return 2 * EARTH_RADIUS_KM * Math.atan2(Math.sqrt(clampedA), Math.sqrt(1 - clampedA));
+}
+
 /**
- * Finds the nearest curated CityPreset for given coordinates using Euclidean degree distance.
- * Falls back to DEFAULT_CITY_PRESET when coordinates are non-finite.
+ * Finds the nearest curated CityPreset and its Haversine distance (km) from given coordinates.
  */
-export function findNearestCityPreset(lat: number, lon: number): CityPreset {
+export function findNearestCityPresetWithDistance(lat: number, lon: number): {
+  readonly preset: CityPreset;
+  readonly distanceKm: number;
+} {
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-    return DEFAULT_CITY_PRESET;
+    return { preset: DEFAULT_CITY_PRESET, distanceKm: Number.POSITIVE_INFINITY };
   }
   let best = DEFAULT_CITY_PRESET;
-  let minDistSq = Number.POSITIVE_INFINITY;
+  let minDistance = Number.POSITIVE_INFINITY;
   for (const preset of CITY_PRESETS) {
-    const dLat = preset.lat - lat;
-    const dLon = preset.lon - lon;
-    const distSq = dLat * dLat + dLon * dLon;
-    if (distSq < minDistSq) {
-      minDistSq = distSq;
+    const dist = haversineKm(lat, lon, preset.lat, preset.lon);
+    if (dist < minDistance) {
+      minDistance = dist;
       best = preset;
     }
   }
-  return best;
+  return { preset: best, distanceKm: minDistance };
+}
+
+/**
+ * Finds the nearest curated CityPreset for given coordinates using Haversine distance.
+ * Falls back to DEFAULT_CITY_PRESET when coordinates are non-finite.
+ */
+export function findNearestCityPreset(lat: number, lon: number): CityPreset {
+  return findNearestCityPresetWithDistance(lat, lon).preset;
 }

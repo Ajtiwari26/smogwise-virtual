@@ -5,6 +5,7 @@
 
 import crypto from 'node:crypto';
 import dotenv from 'dotenv';
+import { logServerEvent } from './logger.js';
 dotenv.config();
 
 /** Typed server environment configuration. */
@@ -21,7 +22,7 @@ const DEFAULT_PORT = 3001;
 const DEFAULT_ALLOWED_ORIGIN = 'http://localhost:5173';
 const MIN_AUTH_SECRET_LENGTH = 32;
 const FALLBACK_AUTH_SECRET = crypto.randomBytes(32).toString('hex');
-let warnedEphemeralSecret = false;
+let warnedMissingSecret = false;
 
 function parsePort(raw: string | undefined): number {
   if (raw === undefined || raw.trim().length === 0) {
@@ -39,10 +40,11 @@ function resolveAuthSecret(raw: string | undefined, nodeEnv: string): string {
   if (trimmed !== undefined && trimmed.length >= MIN_AUTH_SECRET_LENGTH) {
     return trimmed;
   }
-  if (nodeEnv === 'production' && !warnedEphemeralSecret) {
-    warnedEphemeralSecret = true;
+  if (nodeEnv === 'production' && !warnedMissingSecret) {
+    warnedMissingSecret = true;
+    logServerEvent('warn', 'auth_secret_missing', { minLength: MIN_AUTH_SECRET_LENGTH });
     process.emitWarning(
-      'AUTH_SECRET is unset or shorter than 32 characters in production; using an ephemeral per-process secret.',
+      'AUTH_SECRET is unset or shorter than 32 characters in production; session and preference routes are disabled.',
       'SecurityWarning',
     );
   }
@@ -59,6 +61,12 @@ function resolveAllowedOrigin(rawOrigin: string | undefined, nodeEnv: string): s
 
 function resolveTrustProxy(env: NodeJS.ProcessEnv): boolean {
   return env['TRUST_PROXY']?.trim() === '1' || env['VERCEL']?.trim() === '1';
+}
+
+/** Allows production session routes only with a stable, sufficiently long secret. */
+export function isSessionSigningConfigured(): boolean {
+  return process.env['NODE_ENV']?.trim() !== 'production' ||
+    (process.env['AUTH_SECRET']?.trim().length ?? 0) >= MIN_AUTH_SECRET_LENGTH;
 }
 
 /**

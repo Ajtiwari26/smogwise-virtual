@@ -5,6 +5,11 @@
 import React from 'react';
 import type { IAQHackDetail, IAQHackId, LanguageCode } from '../domain/types.js';
 
+function formatAffordableLabel(cost: number, isHi: boolean): string {
+  if (cost === 0) return isHi ? 'मुफ़्त' : 'Free';
+  return isHi ? 'चयन के साथ बजट में' : 'Fits with selection';
+}
+
 /** Budget-sorted indoor air quality intervention checkbox list inside a semantic fieldset. */
 export const HackChecklist: React.FC<{
   readonly hacks: readonly IAQHackDetail[];
@@ -33,8 +38,21 @@ export const HackChecklist: React.FC<{
                 className="mt-1 h-4 w-4 rounded border-slate-500 text-teal-700 focus-visible:ring-2 focus-visible:ring-teal-700"
               />
               <label htmlFor={inputId} className="flex-1 cursor-pointer text-xs text-slate-900">
-                <span className="block font-semibold">
-                  {isHi ? hack.nameHi : hack.name} · ₹{hack.monthlyCostInr}/mo
+                <span className="flex flex-wrap items-center gap-1.5 font-semibold">
+                  <span>
+                    {isHi ? hack.nameHi : hack.name} · ₹{hack.monthlyCostInr}/mo
+                  </span>
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+                      hack.withinBudget
+                        ? 'bg-teal-100 text-teal-900'
+                        : 'bg-amber-100 text-amber-900'
+                    }`}
+                  >
+                    {hack.withinBudget
+                      ? formatAffordableLabel(hack.monthlyCostInr, isHi)
+                      : (isHi ? 'बजट से अधिक' : 'Over budget')}
+                  </span>
                 </span>
                 <span className="block text-slate-700">
                   {isHi ? (hack.doseImpactLabelHi ?? hack.doseImpactLabel) : hack.doseImpactLabel}
