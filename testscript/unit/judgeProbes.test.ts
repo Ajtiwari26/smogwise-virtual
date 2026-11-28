@@ -20,6 +20,9 @@ describe.each(['offline_grounded', 'gemini_interactions'])(
       '₹५०.\n१२ उपाय उपलब्ध हैं।',
       '₹50,\u00a012 hacks fit.',
       '50 INR, 12 options fit.',
+      'Monthly cap: INR 50.',
+      'बजट ५० रुपए है।',
+      'Cap: ₹50, 120 distinct options are listed below.',
       '५० रुपये।',
       '₹५०',
     ])('accepts %j', (answer) => {
@@ -52,6 +55,8 @@ describe.each(['offline_grounded', 'gemini_interactions'])(
       '₹50, 12,345',
       '₹50, ٠٠٠',
       '₹50 .99',
+      'The monthly cap is −₹50.',
+      'The monthly cap is -₹50.',
       'Spend ₹50 billion total.',
       'कुल ₹५० अरब बजट।',
       'Spend ₹50INRish.',

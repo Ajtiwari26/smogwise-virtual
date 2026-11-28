@@ -3,7 +3,7 @@
 import { IAQ_HACK_SPECS } from '../../src/domain/constants.js';
 import type { LanguageCode } from '../../src/domain/types.js';
 
-const MONEY = String.raw`([−+-]?\s*\d[\d,]*(?:\.\d+)?)`;
+const MONEY = String.raw`([−+-]?\s*\d+(?:,\s*\d{2,3}|\s+\d{3})*(?:\.\d+)?)`;
 const CURRENCY = String.raw`(?:₹|\bINR\b|\bRs\.?|\brupees?\b|रुपये|रुपए)`;
 const BUDGET = new RegExp(`${CURRENCY}\\s*${MONEY}|${MONEY}\\s*${CURRENCY}`, 'giu');
 

@@ -476,12 +476,30 @@ describe('Offline what-if routing', () => {
     'क्या हम बस ले पाएँगे?',
     'क्या मैं बस ले पाता हूँ?',
     'क्या मैं बस लूँ?',
+    'क्या मैं बस का इस्तेमाल करूँ?',
+    'क्या मुझे बस की सवारी करनी चाहिए?',
   ])('routes %s to bus without changing fuel', async (question) => {
     const result = await askGroundedAssistant({
       profile: { ...drivingProfile, language: 'hi' }, question,
     });
     expect(result.mode).toBe('offline_grounded');
     expect(result.answer).toContain('प्रतिदिन 3200 g CO2e');
+  });
+
+  it('picks two-wheeler when explicitly preferred instead of bus and keeps narrow-space budget caps', async () => {
+    const negAlt = await askGroundedAssistant({
+      profile: drivingProfile,
+      question: 'Should I switch to a two-wheeler instead of taking the bus?',
+    });
+    expect(negAlt.answer).toContain('2400 g CO2e/day');
+    expect(negAlt.answer).not.toContain('3200');
+
+    const nbspBudget = await askGroundedAssistant({
+      profile: drivingProfile,
+      question: 'What can I do for ₹50\u202f000 per month?',
+    });
+    expect(nbspBudget.answer).toContain('₹50000/month');
+    expect(nbspBudget.answer).not.toContain('₹50/month');
   });
 
   it.each([

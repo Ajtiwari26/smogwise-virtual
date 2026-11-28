@@ -134,11 +134,10 @@ async function probeSinglePersona(
 const D = '\\p{Nd}';
 const WB = `(?![${D}\\p{L}\\p{M}_])`;
 const MULT = `(?:(?:inr|rupees?)(?=[${D}\\p{L}\\p{M}_])|(?:thousands?|lakhs?|lacs?|millions?|billions?|trillions?|crores?|cr|bn|k|ह(?:ज\\u093C?|\\u095B)ार|लाख|करो(?:ड\\u093C?|\\u095C)|अरब|अर्ब|खरब)${WB})`;
-// A spaced comma starts digit grouping only if the groups end in three or more digits.
-const NUMBER_TAIL = `\\s*(?:[.,][${D}]|,\\s+(?:[${D}]{2}\\s*,\\s*)*[${D}]{3,})|\\s+[${D}]{2,}`;
+const NUMBER_TAIL = `\\s*(?:[.,][${D}]|,\\s*(?:[${D}]{2}\\s*,\\s*)+[${D}]{3}|,\\s*[0\\u0966\\u0660]{3}|,\\s*[${D}]{3}(?!\\s+(?!inr\\b|rupees?\\b|रुप(?:ये|ए))[\\p{L}\\p{M}]))|\\s+[${D}]{2,}`;
 const SUF = `${WB}(?!${NUMBER_TAIL}|[\\p{Pd}\\u2212\\s]+${MULT})`;
-const CURRENCY_FIFTY_RE = new RegExp(`(?:^|[^${D}])₹\\s*(?:50|५०)${SUF}`, 'iu');
-const UNIT_FIFTY_RE = new RegExp(`(?:^|[^${D}.,])(?:50|५०)\\s*(?:INR|rupees?|रुपये)${SUF}`, 'iu');
+const CURRENCY_FIFTY_RE = new RegExp(`(?:^|[^${D}\\u2212-])(?:₹|\\b(?:INR|Rs\\.?)\\b)\\s*(?:50|५०)${SUF}`, 'iu');
+const UNIT_FIFTY_RE = new RegExp(`(?:^|[^${D}.,\\u2212-])(?:50|५०)\\s*(?:INR|rupees?|रुप(?:ये|ए))${SUF}`, 'iu');
 
 /** Validates whether an assistant budget reply mentions exact ₹50/५० cap cleanly. */
 export function isGroundedBudgetReplyValid(answer: string, mode: unknown): boolean {

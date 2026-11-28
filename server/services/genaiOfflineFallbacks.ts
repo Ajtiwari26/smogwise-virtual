@@ -30,6 +30,7 @@ const HI_TAKE_AUX =
   'पा(?:य[ाीे]|त[ाीे]|ऊ[ँं](?:ग[ाीे])?|ए[ँं]?(?:ग[ाीे])?))';
 const HI_BUS_POST =
   '(?:से|में|पर|द्वारा|वाला|वाली|वाले|यात्रा|सफर|पास|कम्यूट|स्टॉप|' +
+  `क(?:ा\\s+(?:इस्तेमाल|उपयोग|प्रयोग|सफर|सफ़र|विकल्प)|ी\\s+सवारी)|` +
   `ले(?:न[ाीे]|कर|\\s+${HI_TAKE_AUX})|ल(?:ू[ँं]|ें)|` +
   'पकड़(?:न[ाीे]|कर|ूँ|ूं|ें)?|चढ़(?:न[ाीे]|कर|ूँ|ूं|ें)?|' +
   'चला(?:न[ाीे]|ऊँ|ऊं|एं|एँ)?|बदल(?:न[ाीे]|ूँ|ूं|ें)?|चुन(?:न[ाीे]|ूँ|ूं|ें)?)';
@@ -94,23 +95,36 @@ const FUEL_MATCHERS: readonly { readonly value: CookingFuel; readonly re: RegExp
   },
 ];
 
+const EXCLUSION_CLAUSE_RE = /\b(?:instead\s+of|rather\s+than)\s+[^,;.?!\n]+/giu;
+
+function findFirstOption<T>(
+  text: string,
+  matchers: readonly { readonly value: T; readonly re: RegExp }[],
+  current: T,
+  preferDiff: boolean,
+): T | undefined {
+  const hits = matchers
+    .map((m) => ({ value: m.value, idx: m.re.exec(text)?.index ?? -1 }))
+    .filter((h) => h.idx >= 0)
+    .sort((a, b) => a.idx - b.idx);
+  const picked = preferDiff ? hits.find((h) => h.value !== current) : hits[0];
+  return picked?.value;
+}
+
 function pickAlternativeOption<T>(
   current: T,
   question: string,
   matchers: readonly { readonly value: T; readonly re: RegExp }[],
   fallback: T,
 ): T {
-  const destination = /\b(?:to|into)\s+([^\n]+)/iu.exec(question)?.[1];
-  if (destination !== undefined) {
-    const destDiff = matchers.find((m) => m.value !== current && m.re.test(destination));
-    if (destDiff !== undefined) return destDiff.value;
-    const destSame = matchers.find((m) => m.re.test(destination));
-    if (destSame !== undefined) return destSame.value;
-  }
-  const matched = matchers.filter((m) => m.re.test(question));
-  const diffMatch = matched.find((m) => m.value !== current);
-  if (diffMatch !== undefined) return diffMatch.value;
-  return matched[0] === undefined ? fallback : matched[0].value;
+  const positive = question.replace(EXCLUSION_CLAUSE_RE, ' ');
+  const destination = /\b(?:to|into)\s+([^\n]+)/iu.exec(positive)?.[1];
+  const scope = destination ?? positive;
+  return (
+    findFirstOption(scope, matchers, current, true) ??
+    findFirstOption(scope, matchers, current, false) ??
+    fallback
+  );
 }
 
 function pickOfflineCommute(current: CommuteMode, question: string): CommuteMode {
