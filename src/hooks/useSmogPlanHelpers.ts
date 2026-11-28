@@ -25,15 +25,8 @@ import {
 
 /** Re-exported AQ metadata constants and location helpers for hook consumers. */
 export {
-  type AqErrorCode,
-  type AqMeta,
-  BRIEFING_DEBOUNCE_MS,
-  buildCustomLocation,
-  DEBOUNCE_MS,
-  DEFAULT_RWA_ADOPTION_RATE,
-  DEFAULT_RWA_HOUSEHOLDS,
-  formatAqErrorCode,
-  stripCustomLocation,
+  type AqErrorCode, type AqMeta, BRIEFING_DEBOUNCE_MS, buildCustomLocation, DEBOUNCE_MS,
+  DEFAULT_RWA_ADOPTION_RATE, DEFAULT_RWA_HOUSEHOLDS, formatAqErrorCode, stripCustomLocation,
 } from './useSmogPlanMetadata.js';
 
 type SettledLocRef = TrackedSnapshotMeta & {
@@ -140,6 +133,7 @@ function applySettledPlan(
   tokenForPlan: string | undefined,
   locRef: React.MutableRefObject<SettledLocRef | undefined>,
   setSettledPlan: React.Dispatch<React.SetStateAction<SettledPlanState | undefined>>,
+  setBriefingState: React.Dispatch<React.SetStateAction<SettledBriefingState | undefined>>,
 ): boolean {
   const activeLoc = readActiveLoc(locRef.current, locationKey, revision);
   const ok = shouldAcceptExternalSnapshot(
@@ -151,6 +145,7 @@ function applySettledPlan(
   const resolved = nextToken === undefined || data.snapshotToken !== undefined
     ? data : { ...data, snapshotToken: nextToken };
   setSettledPlan({ profile, revision, locationKey, data: resolved });
+  if (activeLoc?.observationId !== data.report.observationId) setBriefingState(undefined);
   return true;
 }
 
@@ -174,9 +169,11 @@ function schedulePlanSync(
       (data) => {
         const cur = isTargetCurrent(latestTargetRef.current, locationKey, revision);
         if (controller.signal.aborted || !cur) return;
-        if (!applySettledPlan(
-          profile, revision, locationKey, data, tokenForPlan, locRef, setSettledPlan,
-        )) return;
+        const accepted = applySettledPlan(
+          profile, revision, locationKey, data, tokenForPlan,
+          locRef, setSettledPlan, setBriefingState,
+        );
+        if (!accepted) return;
         startBriefingTask({
           profile, revision, locationKey,
           delayMs: BRIEFING_DEBOUNCE_MS - DEBOUNCE_MS - (Date.now() - startedAt),

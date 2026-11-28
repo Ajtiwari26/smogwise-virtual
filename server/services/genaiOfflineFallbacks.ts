@@ -19,21 +19,29 @@ import type {
 } from '../../src/domain/types.js';
 
 const PLANTS_QUESTION_RE = /\bplants?\b|houseplant|indoor\s*plant|areca|spider\s*plant|पौध|गमल/iu;
+const HI_PRE = '(?<![\\p{L}\\p{M}])';
+const HI_END = '(?![\\p{L}\\p{M}])';
+const HI_BUS_POST =
+  '(?:से|में|पर|द्वारा|वाला|वाली|वाले|यात्रा|सफर|पास|कम्यूट|स्टॉप|' +
+  'लेन[ाीे]|लें|ले\\s+लूं|पकड़(?:न[ाीे])?|चढ़(?:न[ाीे])?|चला(?:न[ाीे])?|बदल(?:न[ाीे])?|चुन(?:न[ाीे])?)';
 const HI_BUS_TERM =
-  '(?:सिटी|पब्लिक|सरकारी|इलेक्ट्रिक)\\s+बस|मेट्रो(?:\\s*[/,]\\s*|\\s+(?:या|व)\\s+)बस|' +
-  'बस\\s+(?:से|में|पर|द्वारा|यात्रा|सफर|पास|कम्यूट)';
-const ELECTRIC_COOK_TERM =
-  'electric(?!\\s+(?:bus|car|vehicle|bike|scooter|cycle|auto|rickshaw|metro|train|two[- ]?wheeler))';
+  `${HI_PRE}(?:(?:सिटी|पब्लिक|सरकारी|इलेक्ट्रिक)\\s+बस|` +
+  `मेट्रो(?:\\s*[/,]\\s*|\\s+(?:या|व|और)\\s+)बस|बस\\s+${HI_BUS_POST})${HI_END}`;
+const EV_NOUNS =
+  '(?:bus(?:es)?|cars?|vehicles?|bikes?|scooters?|cycles?|autos?|' +
+  'rickshaws?|metros?|trains?|two[-\\s]?wheelers?)\\b';
+const ELECTRIC_COOK_TERM = `\\belectric\\b(?![-\\s]+${EV_NOUNS})`;
+const EN_COMMUTE = '\\b(?:commut(?:e|ing|er)|carpool(?:ing|s)?|metro|bus(?:es)?|petrol|wfh|walk(?:ing|s)?|two[-\\s]?wheelers?)\\b';
 const COMMUTE_WHAT_IF_RE = new RegExp(
-  `commute|carpool|metro|bus|petrol|wfh|walk|two[- ]?wheeler|आवागमन|यातायात|पैदल|मेट्रो|कारपूल|${HI_BUS_TERM}`,
+  `${EN_COMMUTE}|${HI_PRE}(?:आवागमन|यातायात|पैदल|मेट्रो|कारपूल)${HI_END}|${HI_BUS_TERM}`,
   'iu',
 );
 const FUEL_WHAT_IF_RE = new RegExp(
-  `cooking|fuel|stove|chulha|induction|${ELECTRIC_COOK_TERM}|lpg|biomass|` +
-  'ईंधन|चूल्हा|रसोई|इंडक्शन|एलपीजी|स्टोव',
+  `\\b(?:cook(?:ing|s)?|fuels?|stoves?|chulhas?|induction|lpg|biomass)\\b|` +
+  `${ELECTRIC_COOK_TERM}|${HI_PRE}(?:ईंधन|चूल्ह[ाे]|रसोई|इंडक्शन|एलपीजी|स्टोव)${HI_END}`,
   'iu',
 );
-const GENERIC_WHAT_IF_RE = /what[- ]?if|तुलना/iu;
+const GENERIC_WHAT_IF_RE = /\bwhat[- ]?if\b|तुलना/iu;
 
 /** Returns true for site-independent houseplant-vs-HEPA questions. */
 export function isPlantsQuestion(question: string): boolean {
@@ -53,17 +61,26 @@ function isAqMissing(report: DeterministicReport): boolean {
 }
 
 const COMMUTE_MATCHERS: readonly { readonly value: CommuteMode; readonly re: RegExp }[] = [
-  { value: 'wfh_walk', re: /wfh|walk|पैदल/iu },
-  { value: 'metro_bus', re: new RegExp(`metro|bus|मेट्रो|${HI_BUS_TERM}`, 'iu') },
-  { value: 'carpool', re: /carpool|कारपूल/iu },
-  { value: 'two_wheeler', re: /two[- ]?wheeler/iu },
-  { value: 'petrol_car', re: /petrol/iu },
+  { value: 'wfh_walk', re: new RegExp(`\\b(?:wfh|walk(?:ing|s)?)\\b|${HI_PRE}पैदल${HI_END}`, 'iu') },
+  {
+    value: 'metro_bus',
+    re: new RegExp(`\\b(?:metro|bus(?:es)?)\\b|${HI_PRE}मेट्रो${HI_END}|${HI_BUS_TERM}`, 'iu'),
+  },
+  { value: 'carpool', re: new RegExp(`\\bcarpool(?:ing|s)?\\b|${HI_PRE}कारपूल${HI_END}`, 'iu') },
+  { value: 'two_wheeler', re: /\btwo[- ]?wheelers?\b/iu },
+  { value: 'petrol_car', re: /\bpetrol\b/iu },
 ];
 
 const FUEL_MATCHERS: readonly { readonly value: CookingFuel; readonly re: RegExp }[] = [
-  { value: 'induction', re: new RegExp(`induction|${ELECTRIC_COOK_TERM}|इंडक्शन`, 'iu') },
-  { value: 'lpg', re: /lpg|एलपीजी/iu },
-  { value: 'biomass_chulha', re: /biomass|chulha|चूल्हा/iu },
+  {
+    value: 'induction',
+    re: new RegExp(`\\binduction\\b|${ELECTRIC_COOK_TERM}|${HI_PRE}इंडक्शन${HI_END}`, 'iu'),
+  },
+  { value: 'lpg', re: new RegExp(`\\blpg\\b|${HI_PRE}एलपीजी${HI_END}`, 'iu') },
+  {
+    value: 'biomass_chulha',
+    re: new RegExp(`\\b(?:biomass|chulhas?)\\b|${HI_PRE}चूल्ह[ाे]${HI_END}`, 'iu'),
+  },
 ];
 
 function pickAlternativeOption<T>(

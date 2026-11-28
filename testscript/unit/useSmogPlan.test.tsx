@@ -715,3 +715,40 @@ it('refreshes /api/plan/briefing when assistant update lands before dispatch, mi
     cleanupTestState();
   }
 });
+
+it('clears settled briefing immediately when in-flight /api/plan advances observationId', async () => {
+  setupDefaultMocks();
+  vi.useFakeTimers();
+  try {
+    const { computeFullPlan } = await import('../../src/domain/impactService.js');
+    const aq42: LiveAqOverride = { pm25: 42, observedAt: '2026-11-28T06:00:00Z' };
+    const aq90: LiveAqOverride = { pm25: 90, observedAt: '2026-11-28T09:00:00Z' };
+    const obs42 = resolveReportAq(DEFAULT_PROFILE, aq42).observationId;
+    const obs90 = resolveReportAq(DEFAULT_PROFILE, aq90).observationId;
+    const report42 = computeFullPlan(DEFAULT_PROFILE, aq42).report;
+    const plan90 = { ...computeFullPlan(DEFAULT_PROFILE, aq90), snapshotToken: 'tok-90' };
+    let resolvePlan: ((val: typeof plan90) => void) | undefined;
+    mockedPostPlan.mockImplementation(() => new Promise((r) => { resolvePlan = r; }));
+    mockedPostPlanBriefing
+      .mockResolvedValueOnce({ ...mockBriefingResponse, observationId: obs42 })
+      .mockResolvedValueOnce({ ...mockBriefingResponse, observationId: obs90 });
+
+    const { result } = renderHook(() => useSmogPlan());
+    await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_MS); });
+    act(() => { result.current.syncExternalReport(report42, 'tok-42', undefined); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS); });
+    expect(result.current.briefing?.observationId).toBe(obs42);
+
+    await act(async () => { resolvePlan?.(plan90); });
+    expect(result.current.liveAq?.pm25).toBe(90);
+    expect(result.current.briefing).toBeUndefined();
+    expect(result.current.briefingFailed).toBe(false);
+    expect(result.current.isBriefingLoading).toBe(true);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(BRIEFING_DEBOUNCE_MS); });
+    expect(result.current.briefing?.observationId).toBe(obs90);
+    expect(result.current.briefingFailed).toBe(false);
+  } finally {
+    cleanupTestState();
+  }
+});

@@ -414,5 +414,35 @@ describe('Grounded Q&A', () => {
       }),
     });
     expect(hiLpgOnly.answer).not.toContain('3200 g CO2e/day');
+
+    const hyphenBus = await askGroundedAssistant({
+      question: 'Should I switch to electric-bus?',
+      profile: makeProfile({ commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'lpg' }),
+    });
+    expect(hyphenBus.answer).toContain('3200 g CO2e/day');
+    expect(hyphenBus.answer).not.toContain('3930');
+
+    const busyWordInduction = await askGroundedAssistant({
+      question: 'On a busy schedule, what if I keep induction?',
+      profile: makeProfile({ commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'induction' }),
+    });
+    expect(busyWordInduction.answer).toContain('0 g CO2e/day');
+
+    const hiHealthyJustWord = await askGroundedAssistant({
+      question: 'क्या मैं बस सेहत के लिए इंडक्शन रखूँ?',
+      profile: makeProfile({
+        language: 'hi', commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'induction',
+      }),
+    });
+    expect(hiHealthyJustWord.answer).toContain('0 g CO2e');
+
+    const hiTakeBus = await askGroundedAssistant({
+      question: 'क्या मुझे बस लेनी चाहिए?',
+      profile: makeProfile({
+        language: 'hi', commuteMode: 'petrol_car', commuteDistanceKm: 20, cookingFuel: 'lpg',
+      }),
+    });
+    expect(hiTakeBus.answer).toContain('3200 g CO2e');
+    expect(hiTakeBus.answer).not.toContain('3930');
   });
 });
